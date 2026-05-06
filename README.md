@@ -1,20 +1,36 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# TraderSuit Autonomous Quant Platform
 
-# Run and deploy your AI Studio app
+Research-grade, microstructure-aware trading system based on Smart Money Concepts (SMC).
 
-This contains everything you need to run your app locally.
+## Features
 
-View your app in AI Studio: https://ai.studio/apps/0496c375-9639-493d-92ae-a82e0cfd293c
+- **Deterministic Alpha**: Rule-based SMC signal generation (Liquidity sweeps, BOS, CHoCH).
+- **Microstructure Intelligence**: Order-flow imbalance (OFI), Depth imbalance, and dynamic slippage modeling.
+- **Meta-Labeling**: ML filtering layer to reduce false positives from the base strategy.
+- **Event-Driven Backtester**: Realistic fill simulation with spread and commission impact.
+- **Research Registry**: Versioned feature and experiment tracking for reproducible quant workflows.
 
-## Run Locally
+## Pipeline Architecture
 
-**Prerequisites:**  Node.js
+`Scenarios (SMC)` → `Feature Fusion` → `Meta-Model (ML Filter)` → `Risk Gating` → `Execution Decision` → `OMS/Broker`
 
+## Directory Structure
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+- `src/core/`: Event system, clock, and fundamental types.
+- `src/data/`: Data contracts and ingestion pipelines.
+- `src/market_microstructure/`: Orderbook and trade analytics.
+- `src/ml/`: Meta-model training and inference.
+- `src/research/`: Experiment tracking and reporting.
+
+## Setup
+
+```bash
+# Install dependencies
+npm install
+# Note: Platform logic is implemented in Python-ready structures, 
+# though the dashboard is a Next.js React client.
+```
+
+## Dashboard
+
+The dashboard provides a real-time view into the engine's state, active zones, and backtest results. Use the "Run Backtest" button to trigger a simulated research run.
