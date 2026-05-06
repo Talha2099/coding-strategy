@@ -1,0 +1,6 @@
+{
+  "name": "TraderSuit Autonomous Dashboard",
+  "description": "A high-performance trading strategy visualization dashboard featuring market structure analysis, liquidity detection, and ML-driven backtesting results.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
