@@ -1,5 +1,5 @@
 from typing import List, Dict
-from src.data.contracts.base import Candle
+from src.core.types.trading import Candle
 from enum import Enum
 
 class ZoneType(Enum):

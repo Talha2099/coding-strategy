@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from typing import Literal
-from src.data.contracts.trading import ScoredTrade, ExecutionOrder, FillResult
+from src.core.types.trading import ScoredTrade, ExecutionOrder, FillResult
 
 class ExecutionEngine:
     def __init__(self, commission_per_lot: float = 5.0):

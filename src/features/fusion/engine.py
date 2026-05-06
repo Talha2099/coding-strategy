@@ -1,6 +1,5 @@
 from typing import Dict
-from src.data.contracts.trading import TradeCandidate
-from src.data.contracts.base import MicrostructureFeatures
+from src.core.types.trading import TradeCandidate, MicrostructureFeatures
 
 class FeatureFusionEngine:
     def __init__(self):

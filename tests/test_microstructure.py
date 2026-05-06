@@ -1,6 +1,6 @@
 import pytest
 from datetime import datetime
-from src.data.contracts.base import Tick, OrderBookSnapshot
+from src.core.types.trading import Tick, OrderBookSnapshot
 from src.market_microstructure.engine import MicrostructureEngine
 
 def test_microstructure_compute():

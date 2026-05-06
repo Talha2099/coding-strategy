@@ -1,7 +1,9 @@
 from typing import List, Dict
 from datetime import datetime
-from src.data.contracts.base import Candle, Tick, OrderBookSnapshot
-from src.data.contracts.trading import TradeCandidate, ScoredTrade, ExecutionOrder, FillResult
+from src.core.types.trading import (
+    Candle, Tick, OrderBookSnapshot, 
+    TradeCandidate, ScoredTrade, ExecutionOrder, FillResult
+)
 from src.market_microstructure.engine import MicrostructureEngine
 from src.features.fusion.engine import FeatureFusionEngine
 from src.ml.meta_labeling.model import MetaModel

@@ -1,5 +1,5 @@
 from typing import List, Optional
-from src.data.contracts.base import OrderBookSnapshot, Tick, MicrostructureFeatures
+from src.core.types.trading import OrderBookSnapshot, Tick, MicrostructureFeatures
 import numpy as np
 
 class MicrostructureEngine:

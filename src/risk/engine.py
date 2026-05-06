@@ -1,4 +1,4 @@
-from src.data.contracts.trading import ScoredTrade
+from src.core.types.trading import ScoredTrade
 
 class RiskEngine:
     def __init__(self, max_exposure: float = 0.02, min_prob_threshold: float = 0.6):

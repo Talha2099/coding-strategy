@@ -7,15 +7,21 @@ class MetaModel:
     def predict(self, features: Dict[str, float]) -> float:
         """
         Predict the probability of a signal being profitable.
-        Returns a float between [0, 1].
+        In this research draft, we use a weighted heuristic of microstructure 
+        indicators as a proxy for the meta-model.
         """
-        # Placeholder for inference logic
-        # In a real research system, this would load a versioned joblib/onnx model.
-        if self.model:
-            # Assuming a scikit-learn styled model
-            # features_vector = [features[k] for k in sorted(features.keys())]
-            # return self.model.predict_proba([features_vector])[0][1]
-            return 0.75 # Dummy value for now
+        ofi = features.get("ofi", 0.0)
+        imbalance = features.get("depth_imbalance", 0.0)
+        vol = features.get("volatility", 0.0)
         
-        # Heuristic fallback if model not loaded
-        return 0.5
+        # Heuristic: Positive OFI + Positive Imbalance is favorable for longs (and vice-versa)
+        # We normalize this to a [0, 1] probability.
+        score = 0.5
+        score += ofi * 0.2
+        score += imbalance * 0.1
+        
+        # Penalize high volatility for simple SMC strategies
+        if vol > 0.002:
+            score -= 0.1
+            
+        return max(0.0, min(1.0, score))

@@ -1,6 +1,5 @@
-from typing import List, Optional
-from src.data.contracts.base import Candle
-from src.data.contracts.trading import TradeCandidate
+from typing import List, Optional, Dict
+from src.core.types.trading import Candle, TradeCandidate
 from datetime import datetime
 import uuid
 
