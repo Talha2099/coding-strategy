@@ -17,9 +17,11 @@ class MicrostructureEngine:
         if len(self.trades) > 1000:
             self.trades.pop(0)
 
-    def compute_features(self) -> MicrostructureFeatures:
+    def compute_features(self, skip_ofi: bool = False) -> MicrostructureFeatures:
         if not self.current_snapshot:
-            return MicrostructureFeatures(0, 0, 0, 0, 0, 0)
+            # Handle case where only trades are available (OFI-only or partial)
+            mid_price = self.trades[-1].price if self.trades else 0
+            return MicrostructureFeatures(0, mid_price, 0, 0, 0, 0)
         
         best_bid = self.current_snapshot.bids[0][0] if self.current_snapshot.bids else 0
         best_ask = self.current_snapshot.asks[0][0] if self.current_snapshot.asks else 0
@@ -33,9 +35,11 @@ class MicrostructureEngine:
         imbalance = (bid_depth - ask_depth) / (bid_depth + ask_depth) if (bid_depth + ask_depth) > 0 else 0
         
         # Order Flow Imbalance (from recent trades)
-        buy_vol = sum(t.size for t in self.trades if t.side == "buy")
-        sell_vol = sum(t.size for t in self.trades if t.side == "sell")
-        ofi = (buy_vol - sell_vol) / (buy_vol + sell_vol) if (buy_vol + sell_vol) > 0 else 0
+        ofi = 0
+        if not skip_ofi:
+            buy_vol = sum(t.size for t in self.trades if t.side == "buy")
+            sell_vol = sum(t.size for t in self.trades if t.side == "sell")
+            ofi = (buy_vol - sell_vol) / (buy_vol + sell_vol) if (buy_vol + sell_vol) > 0 else 0
         
         # Realized Volatility (approx from trades)
         if len(self.trades) > 1:

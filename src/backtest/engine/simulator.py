@@ -10,51 +10,72 @@ from src.ml.meta_labeling.model import MetaModel
 from src.risk.engine import RiskEngine
 from src.execution.engine.base import ExecutionEngine
 
+from src.ml.pattern_recognition.model import PatternRecognizer
+
 class EventDrivenBacktester:
     def __init__(self, 
                  micro_engine: MicrostructureEngine,
                  fusion_engine: FeatureFusionEngine,
                  meta_model: MetaModel,
                  risk_engine: RiskEngine,
-                 exec_engine: ExecutionEngine):
+                 exec_engine: ExecutionEngine,
+                 pattern_recognizer: PatternRecognizer = None):
         self.micro_engine = micro_engine
         self.fusion_engine = fusion_engine
         self.meta_model = meta_model
         self.risk_engine = risk_engine
         self.exec_engine = exec_engine
+        self.pattern_recognizer = pattern_recognizer or PatternRecognizer()
         
         self.history = []
         self.pnl = 0.0
+        self.price_history = [] # For pattern recognition window
 
     def on_tick(self, tick: Tick):
         self.micro_engine.update_trades(tick)
+        self.price_history.append(tick.price)
+        if len(self.price_history) > 100: self.price_history.pop(0)
 
     def on_orderbook(self, snapshot: OrderBookSnapshot):
         self.micro_engine.update_orderbook(snapshot)
 
-    def process_candidate(self, candidate: TradeCandidate):
+    def process_candidate(self, candidate: TradeCandidate, skip_ofi: bool = False):
         """
         The full pipeline execution for a single candidate.
         """
-        # 1. Compute microstructure features
-        micro_features = self.micro_engine.compute_features()
+        # 1. Compute microstructure features (optional OFI)
+        micro_features = self.micro_engine.compute_features(skip_ofi=skip_ofi)
         
-        # 2. Build feature vector (Fusion)
+        # 2. Pattern Recognition (CNN/LSTM Logic)
+        pattern_data = self.pattern_recognizer.calculate_score(
+            candidate, 
+            self.price_history, 
+            {"entry": candidate.entry_zone}
+        )
+        pattern_prob = pattern_data["probability"]
+        
+        # 3. Build feature vector (Fusion)
         features = self.fusion_engine.build_feature_vector(
             candidate, 
             micro_features, 
-            {"regime_vol": micro_features.realized_volatility}
+            {
+                "regime_vol": micro_features.realized_volatility,
+                "pattern_score": pattern_prob
+            }
         )
         
-        # 3. Model Scoring
+        # 4. Model Scoring (Meta-Model Filter)
         prob = self.meta_model.predict(features)
         
-        # 4. Create Scored Trade
+        # Final weighted probability
+        final_prob = (prob + pattern_prob) / 2
+        
+        # 5. Create Scored Trade
         scored_trade = ScoredTrade(
             candidate=candidate,
-            probability=prob,
-            expected_return=prob * (abs(candidate.take_profit - candidate.entry_zone)), # Simple EV
-            risk_score=0.1, # Dummy
+            probability=final_prob,
+            expected_return=final_prob * (abs(candidate.take_profit - candidate.entry_zone)),
+            risk_score=0.1,
             features=features
         )
         
