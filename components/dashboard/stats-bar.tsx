@@ -1,13 +1,13 @@
 'use client';
 
 import React from 'react';
-import { TrendingUp, Activity, BarChart3, AlertCircle } from 'lucide-react';
+import { TrendingUp, Activity, Binary, ShieldCheck, Zap, Cpu } from 'lucide-react';
 
 const stats = [
-  { label: 'Total Net Profit', value: '$12,450.00', trend: '+12.5%', icon: TrendingUp, color: 'text-[#00FF00]' },
-  { label: 'Sharpe Ratio', value: '2.45', trend: 'Robust', icon: BarChart3, color: 'text-blue-400' },
-  { label: 'Win Rate', value: '64.2%', trend: '+2.1%', icon: Activity, color: 'text-[#00FF00]' },
-  { label: 'Max Drawdown', value: '4.8%', trend: 'Low Risk', icon: AlertCircle, color: 'text-orange-400' },
+  { label: 'GARCH(1,1) Vol', value: '0.0012', trend: 'Forecasted', icon: Activity, color: 'text-blue-400' },
+  { label: 'HMM Confidence', value: '88.4%', trend: 'State: RANGE', icon: Cpu, color: 'text-[#00FF00]' },
+  { label: 'Kelly Fraction', value: '0.12x', trend: 'Risk Capped', icon: ShieldCheck, color: 'text-orange-400' },
+  { label: 'Exp. Return', value: '+14.2 bps', trend: 'MC Filtered', icon: Zap, color: 'text-[#00FF00]' },
 ];
 
 export function StatsBar() {

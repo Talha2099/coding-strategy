@@ -6,6 +6,8 @@ import { StatsBar } from '@/components/dashboard/stats-bar';
 import { PerformanceChart } from '@/components/dashboard/performance-chart';
 import { ZoneGrid } from '@/components/dashboard/zone-grid';
 import { TradeTable } from '@/components/dashboard/trade-table';
+import { WorkflowPipeline } from '@/components/dashboard/workflow-pipeline';
+import { RegimeTracker } from '@/components/dashboard/regime-tracker';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Bell, 
@@ -20,13 +22,17 @@ import {
   RefreshCw,
   Terminal,
   Layers,
-  FlaskConical
+  FlaskConical,
+  Binary,
+  CheckCircle2
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { WorkflowSimulator, SimulationStep, WORKFLOW_STAGES } from '@/src/core/utils/simulation_logic';
 
 export default function DashboardPage() {
   const [isSimulating, setIsSimulating] = React.useState(false);
   const [activeTab, setActiveTab] = React.useState('pipeline');
+  const [steps, setSteps] = React.useState<SimulationStep[]>([]);
   const [logs, setLogs] = React.useState<string[]>([
     'System initialized',
     'MT5 Gateway established',
@@ -34,26 +40,38 @@ export default function DashboardPage() {
     'Meta-model filter loaded: version 2.4.1'
   ]);
 
+  const simulator = React.useMemo(() => new WorkflowSimulator(), []);
+
   const addLog = (msg: string) => {
     setLogs(prev => [...prev.slice(-9), `${new Date().toLocaleTimeString()} - ${msg}`]);
   };
 
-  const runSimulation = () => {
-    setIsSimulating(true);
-    addLog('Starting Backtest Simulation...');
+  const runSimulation = async () => {
+    if (isSimulating) return;
     
-    setTimeout(() => {
-      addLog('Extracting Microstructure Features...');
-    }, 500);
-
-    setTimeout(() => {
-      addLog('Meta-Model Filtering: 3 Candidates rejected by Risk Engine');
-    }, 1200);
+    setIsSimulating(true);
+    setSteps([]);
+    addLog('Initiating full-stack execution workflow...');
+    
+    await simulator.runStepByStep((step) => {
+      setSteps(prev => {
+        const index = prev.findIndex(s => s.id === step.id);
+        if (index !== -1) {
+          const next = [...prev];
+          next[index] = step;
+          return next;
+        }
+        return [...prev, step];
+      });
+      if (step.status === 'completed') {
+        addLog(`${step.name} finalized`);
+      }
+    });
 
     setTimeout(() => {
       setIsSimulating(false);
-      addLog('Backtest completed. Sharif Ratio updated: 2.45');
-    }, 2000);
+      addLog('Workflow cycle complete. Neutral status achieved.');
+    }, 1000);
   };
 
   return (
@@ -122,22 +140,25 @@ export default function DashboardPage() {
               animate={{ opacity: 1, scale: 1 }}
               transition={{ duration: 0.5, delay: 0.1 }}
             >
-              {/* Performance Section */}
-              <section id="performance-section" className="bg-[#151619] rounded-2xl border border-[#2A2B2F] p-6 space-y-6">
-                <div className="flex justify-between items-center bg-[#1A1B1F] p-4 rounded-xl border border-[#2A2B2F]/50">
+              {/* Performance Section / Pipeline View */}
+              <section id="pipeline-view" className="bg-[#151619] rounded-2xl border border-[#2A2B2F] overflow-hidden">
+                <div className="flex justify-between items-center bg-[#1A1B1F] p-4 border-b border-[#2A2B2F]/50">
                   <div className="flex items-center gap-4">
-                    <div className="p-3 bg-[#00FF00]/10 rounded-xl">
-                      <BarChart2 size={24} className="text-[#00FF00]" />
+                    <div className="p-3 bg-white/5 rounded-xl border border-white/10">
+                      <Binary size={24} className="text-white" />
                     </div>
                     <div>
                       <h2 className="text-white text-sm font-bold uppercase tracking-widest flex items-center gap-2">
-                        Equity Distribution
+                        Execution Pipeline
                       </h2>
-                      <p className="text-[#8E9299] text-[10px] font-mono mt-1 italic leading-none">Simulating 1,240 historical events • OFI Neutralization active</p>
+                      <p className="text-[#8E9299] text-[10px] font-mono mt-1 italic leading-none">Automated Step-by-Step System Diagnostics</p>
                     </div>
                   </div>
                   <div className="flex gap-2">
-                    <button id="reset-backtest" className="p-3 rounded-xl bg-[#2A2B2F]/30 border border-[#2A2B2F] text-[#8E9299] hover:text-white transition-all">
+                    <button 
+                      onClick={() => setSteps([])}
+                      className="p-3 rounded-xl bg-[#2A2B2F]/30 border border-[#2A2B2F] text-[#8E9299] hover:text-white transition-all"
+                    >
                       <RotateCcw size={16} />
                     </button>
                     <button 
@@ -147,17 +168,73 @@ export default function DashboardPage() {
                       className={cn(
                         "px-6 py-2 rounded-xl text-[11px] items-center gap-3 flex transition-all font-bold uppercase tracking-widest",
                         isSimulating 
-                          ? "bg-[#2A2B2F] text-[#8E9299] cursor-not-allowed" 
-                          : "bg-white text-black hover:bg-[#00FF00] hover:text-black shadow-lg shadow-white/5"
+                          ? "bg-[#2A2B2F] text-[#8E9299] cursor-not-allowed border border-white/5" 
+                          : "bg-[#00FF00] text-black hover:bg-white hover:text-black shadow-lg shadow-[#00FF00]/5"
                       )}
                     >
                       {isSimulating ? <RefreshCw className="animate-spin" size={14} /> : <Play size={14} fill="currentColor" />}
-                      {isSimulating ? "Running..." : "Initiate Research"}
+                      {isSimulating ? "Processing..." : "Observe Workflow"}
                     </button>
                   </div>
                 </div>
-                <div className={cn("transition-all duration-500", isSimulating ? "opacity-30 blur-sm brightness-50" : "opacity-100")}>
-                  <PerformanceChart />
+                
+                <div className="p-8 grid grid-cols-1 md:grid-cols-12 gap-12 min-h-[500px]">
+                  <div className="md:col-span-5 border-r border-[#2A2B2F]/50 pr-8">
+                    <WorkflowPipeline steps={steps} />
+                  </div>
+                  
+                  <div className="md:col-span-7 flex flex-col">
+                    <div className="flex-1 rounded-2xl bg-black/40 border border-[#2A2B2F] p-8 relative flex flex-col items-center justify-center text-center overflow-hidden">
+                      <div className="absolute inset-0 opacity-10 flex items-center justify-center">
+                         <Cpu size={300} strokeWidth={0.5} />
+                      </div>
+                      
+                      <AnimatePresence mode="wait">
+                        {isSimulating ? (
+                          <motion.div 
+                            key="simulating"
+                            initial={{ opacity: 0, scale: 0.9 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 1.1 }}
+                            className="space-y-6 relative z-10"
+                          >
+                            <div className="w-24 h-24 rounded-full border-4 border-[#00FF00]/20 border-t-[#00FF00] animate-spin mx-auto" />
+                            <div className="space-y-2">
+                              <h3 className="text-[#00FF00] font-mono text-xl animate-pulse">SYSTEM_IN_LOOP</h3>
+                              <p className="text-gray-500 text-xs italic">Executing mathematical abstractions onto live time-series...</p>
+                            </div>
+                          </motion.div>
+                        ) : steps.length === WORKFLOW_STAGES.length ? (
+                          <motion.div 
+                            key="complete"
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            className="space-y-4 relative z-10"
+                          >
+                            <div className="p-4 bg-[#00FF00]/10 rounded-full inline-block mb-4">
+                              <CheckCircle2 size={48} className="text-[#00FF00]" />
+                            </div>
+                            <h3 className="text-white font-bold text-2xl tracking-tighter uppercase italic">Optimized Verdict</h3>
+                            <div className="grid grid-cols-2 gap-4 max-w-sm mx-auto mt-6">
+                              <div className="bg-[#151619] p-4 rounded-xl border border-[#2A2B2F]">
+                                <span className="text-[10px] uppercase text-[#8E9299] block mb-1">Signal Score</span>
+                                <span className="text-2xl text-white font-mono">0.94</span>
+                              </div>
+                              <div className="bg-[#151619] p-4 rounded-xl border border-[#2A2B2F]">
+                                <span className="text-[10px] uppercase text-[#8E9299] block mb-1">Risk Buffer</span>
+                                <span className="text-2xl text-white font-mono">1.4x</span>
+                              </div>
+                            </div>
+                          </motion.div>
+                        ) : (
+                          <div className="space-y-4 relative z-10 opacity-40">
+                            <Activity size={48} className="mx-auto text-gray-600" />
+                            <h3 className="text-gray-400 font-bold tracking-widest uppercase">Select Action to Begin Audit</h3>
+                          </div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  </div>
                 </div>
               </section>
 
@@ -218,35 +295,9 @@ export default function DashboardPage() {
                 <ZoneGrid />
               </section>
 
-              {/* Research Tracking */}
-              <section id="system-info" className="p-6 bg-linear-to-br from-[#151619] to-[#0A0B0D] border border-[#2A2B2F] rounded-2xl space-y-6 relative overflow-hidden">
-                <div className="absolute -bottom-4 -right-4 p-4 opacity-5 pointer-events-none">
-                  <FlaskConical size={120} className="text-white" />
-                </div>
-                <div className="space-y-1">
-                  <h3 className="text-white text-xs font-bold uppercase tracking-widest">Research Context</h3>
-                  <p className="text-[10px] text-[#8E9299]">Current Experiment: <span className="text-white">OFI_META_v2</span></p>
-                </div>
-
-                <div className="space-y-4 relative z-10">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="p-3 bg-black/40 rounded-xl border border-[#2A2B2F]">
-                      <span className="text-[9px] uppercase font-mono block text-[#8E9299] mb-1">Expected EV</span>
-                      <span className="text-white text-sm font-mono">+14.2 bps</span>
-                    </div>
-                    <div className="p-3 bg-black/40 rounded-xl border border-[#2A2B2F]">
-                      <span className="text-[9px] uppercase font-mono block text-[#8E9299] mb-1">Model Fit</span>
-                      <span className="text-[#00FF00] text-sm font-mono">0.88</span>
-                    </div>
-                  </div>
-                  
-                  <div className="pt-4 border-t border-[#2A2B2F]">
-                    <div className="flex justify-between text-[11px] items-center text-[#8E9299] font-mono">
-                      <span>Execution Environment</span>
-                      <span className="text-white">RL-OPTIMIZED</span>
-                    </div>
-                  </div>
-                </div>
+              {/* Regime Tracking */}
+              <section id="regime-section">
+                <RegimeTracker />
               </section>
             </motion.div>
           </div>

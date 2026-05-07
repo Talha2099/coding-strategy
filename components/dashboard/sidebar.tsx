@@ -8,16 +8,17 @@ import {
   Settings, 
   ShieldCheck, 
   Zap,
-  ChevronRight
+  ChevronRight,
+  Binary
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navItems = [
-  { id: 'dashboard', label: 'Strategy Dashboard', icon: LayoutDashboard, active: true },
-  { id: 'backtest', label: 'Backtest Engine', icon: BarChart2 },
-  { id: 'ml-models', label: 'Meta Models', icon: Cpu },
-  { id: 'risk', label: 'Risk Controls', icon: ShieldCheck },
-  { id: 'settings', label: 'System Settings', icon: Settings },
+  { id: 'dashboard', label: 'Quant Monitor', icon: LayoutDashboard, active: true },
+  { id: 'math-engine', label: 'Math Auditor', icon: Binary },
+  { id: 'pattern-lab', label: 'Pattern Lab', icon: Cpu },
+  { id: 'risk-engine', label: 'Risk Dynamics', icon: ShieldCheck },
+  { id: 'settings', label: 'Engine Config', icon: Settings },
 ];
 
 export function Sidebar() {
