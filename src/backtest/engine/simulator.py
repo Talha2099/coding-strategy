@@ -1,3 +1,5 @@
+import numpy as np
+import uuid
 from typing import List, Dict
 from datetime import datetime
 from src.core.types.trading import (
@@ -7,141 +9,108 @@ from src.core.types.trading import (
 from src.market_microstructure.engine import MicrostructureEngine
 from src.features.fusion.engine import FeatureFusionEngine
 from src.ml.meta_labeling.model import MetaModel
-from src.risk.engine import RiskEngine
+from src.risk.asset_aware_risk import MultiAssetRiskEngine, CrashProtectionModule
 from src.execution.engine.base import ExecutionEngine
-
+from src.core.contracts.spec import ContractManager, SessionType
+from src.indicators.trend_filter import TrendModule
 from src.ml.pattern_recognition.model import PatternRecognizer
-
 from src.core.analytics.factor_engine import FactorEngine
 
 class EventDrivenBacktester:
     def __init__(self, 
+                 contract_manager: ContractManager,
                  micro_engine: MicrostructureEngine,
                  fusion_engine: FeatureFusionEngine,
                  meta_model: MetaModel,
-                 risk_engine: RiskEngine,
+                 risk_engine: MultiAssetRiskEngine,
                  exec_engine: ExecutionEngine,
-                 pattern_recognizer: PatternRecognizer = None):
+                 trend_module: TrendModule,
+                 crash_module: CrashProtectionModule):
+        self.contract_manager = contract_manager
         self.micro_engine = micro_engine
         self.fusion_engine = fusion_engine
         self.meta_model = meta_model
         self.risk_engine = risk_engine
         self.exec_engine = exec_engine
-        self.pattern_recognizer = pattern_recognizer or PatternRecognizer()
+        self.trend_module = trend_module
+        self.crash_module = crash_module
         self.factor_engine = FactorEngine()
         
         self.history = []
-        self.pnl = 0.0
-        self.equity_curve = [10000.0]
-        self.price_history = []
-        self.trades_pending_return = [] # To calculate forward returns for factors
+        self.equity_curve = [100000.0]
+        self.current_positions: Dict[str, float] = {}
+        self.price_history: Dict[str, List[float]] = {}
 
     def on_tick(self, tick: Tick):
+        symbol = tick.symbol
+        if symbol not in self.price_history: self.price_history[symbol] = []
+        
         self.micro_engine.update_trades(tick)
-        self.price_history.append(tick.price)
-        if len(self.price_history) > 100: self.price_history.pop(0)
+        self.price_history[symbol].append(tick.price)
+        if len(self.price_history[symbol]) > 100: self.price_history[symbol].pop(0)
         
-        # Check pending returns for factor updates
-        self._update_factor_returns(tick.price)
+        spec = self.contract_manager.get_spec(symbol)
+        session = self.contract_manager.get_session(tick.timestamp)
+        
+        # Trend Analysis
+        trend_state = self.trend_module.get_trend_state(symbol, tick.price, self.price_history[symbol])
+        
+        # Financing Check (at 22:00 UTC)
+        if tick.timestamp.hour == 22 and tick.timestamp.minute == 0:
+            self._apply_financing(symbol)
 
-    def _update_factor_returns(self, current_price: float):
-        """
-        Calculates realized forward returns for pending trade candidates 
-        to update factor ICs.
-        """
-        still_pending = []
-        for trade in self.trades_pending_return:
-            # If 50 periods have passed, record return
-            trade["counter"] += 1
-            if trade["counter"] >= 50:
-                fwd_return = (current_price - trade["start_price"]) / trade["start_price"]
-                if trade["side"] == "sell": fwd_return *= -1
-                self.factor_engine.update(trade["features"], fwd_return, trade.get("pnl"))
-            else:
-                still_pending.append(trade)
-        self.trades_pending_return = still_pending
-
-    def on_orderbook(self, snapshot: OrderBookSnapshot):
-        self.micro_engine.update_orderbook(snapshot)
-
-    def process_candidate(self, candidate: TradeCandidate, skip_ofi: bool = False):
-        """
-        The full pipeline execution for a single candidate with factor recording.
-        """
-        # 1. Compute microstructure features
-        micro_features = self.micro_engine.compute_features(skip_ofi=skip_ofi)
-        
-        # 2. Pattern Recognition
-        pattern_data = self.pattern_recognizer.calculate_score(
-            candidate, 
-            self.price_history, 
-            {"entry": candidate.entry_zone}
-        )
-        pattern_prob = pattern_data["probability"]
-        
-        # 3. Build features
-        features = self.fusion_engine.build_feature_vector(
-            candidate, 
-            micro_features, 
-            {
-                "regime_vol": micro_features.realized_volatility,
-                "pattern_score": pattern_prob
-            }
-        )
-        
-        # 4. Meta-Model Scoring
-        prob = self.meta_model.predict(features)
-        final_prob = (prob + pattern_prob) / 2
-        
-        # 5. Create Scored Trade
-        scored_trade = ScoredTrade(
-            candidate=candidate,
-            probability=final_prob,
-            expected_return=final_prob * (abs(candidate.take_profit - candidate.entry_zone)),
-            risk_score=0.1,
-            features=features
-        )
-        
-        # 6. Risk Gating
-        if not self.risk_engine.validate(scored_trade):
-            return "REJECTED_BY_RISK"
-            
-        # 7. Execution
-        size = self.risk_engine.position_size(scored_trade)
-        order_type = self.exec_engine.decide_order_type(scored_trade)
-        order = ExecutionOrder(
-            id=candidate.id + "_order",
-            symbol=candidate.symbol,
-            side="buy" if candidate.direction == "long" else "sell",
-            type=order_type,
-            price=candidate.entry_zone,
-            size=size,
-            timestamp=datetime.now()
-        )
-        
-        fill = self.exec_engine.execute(order)
-        
-        # Track PnL (Simplified: entry to TP/SL)
-        pnl = (candidate.take_profit - candidate.entry_zone) * size if final_prob > 0.6 else -(candidate.entry_zone - candidate.stop_loss) * size
-        self.pnl += pnl
-        self.equity_curve.append(self.equity_curve[-1] + pnl)
-
-        # Record for Factor Analysis
-        self.trades_pending_return.append({
-            "features": features,
-            "start_price": candidate.entry_zone,
-            "side": candidate.direction,
-            "counter": 0,
-            "pnl": pnl
-        })
-        
         self.history.append({
-            "candidate": candidate,
-            "scored_trade": scored_trade,
-            "order": order,
-            "fill": fill,
-            "pnl": pnl
+            "tick": tick,
+            "session": session,
+            "trend": trend_state
         })
+
+    def _apply_financing(self, symbol: str):
+        pos = self.current_positions.get(symbol, 0.0)
+        if pos == 0: return
+        spec = self.contract_manager.get_spec(symbol)
+        cost = abs(pos) * (spec.swap_long if pos > 0 else spec.swap_short)
+        self.equity_curve.append(self.equity_curve[-1] - cost)
+
+    def process_candidate(self, candidate: TradeCandidate, dt: datetime):
+        symbol = candidate.symbol
+        spec = self.contract_manager.get_spec(symbol)
+        session = self.contract_manager.get_session(dt)
+        
+        # 1. Crash Protection
+        vol = (self.history[-1]["tick"].price * 0.001) if self.history else 0.0001
+        crash_status = self.crash_module.should_block(symbol, vol, np.eye(1))
+        if crash_status["block"]:
+            return "REJECTED_CRASH_DEFENSE"
+
+        # 2. Trend Filtering
+        trend = self.history[-1]["trend"]
+        if candidate.direction == "long" and trend["direction"] != 1:
+            return "REJECTED_TREND_MISMATCH"
+            
+        # 3. Meta-Model Scoring
+        micro_features = self.micro_engine.compute_features()
+        features = self.fusion_engine.build_feature_vector(candidate, micro_features, {
+            "trend_strength": trend["strength"],
+            "session": session.value,
+            "asset_class": spec.asset_class.value
+        })
+        prob = self.meta_model.predict(features)
+        if prob < 0.6: return "REJECTED_META_LABEL"
+
+        # 4. Risk & Sizing
+        valid, msg = self.risk_engine.validate_trade(symbol, 1.0, True, self.equity_curve[-1])
+        if not valid: return f"REJECTED_RISK_{msg}"
+        
+        size = self.risk_engine.get_position_sizing(symbol, vol, self.equity_curve[-1], candidate.stop_dist)
+        
+        # 5. Execution
+        order = ExecutionOrder(id=uuid.uuid4().hex, symbol=symbol, side="buy" if candidate.direction == "long" else "sell", price=candidate.entry_zone, size=size, type="market")
+        fill = self.exec_engine.execute(order, session, vol)
+        
+        pos_change = size if candidate.direction == "long" else -size
+        self.current_positions[symbol] = self.current_positions.get(symbol, 0.0) + pos_change
+        self.equity_curve.append(self.equity_curve[-1] - fill.commission)
         
         return "EXECUTED"
 
