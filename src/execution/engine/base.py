@@ -74,15 +74,32 @@ class ExecutionEngine:
     def execute(self, order: ExecutionOrder, session: SessionType, vol: float = 0.0001) -> FillResult:
         """
         Simulates execution with session and volatility context.
+        Includes session-based liquidity scaling and partial fills.
         """
         slippage = self.estimate_slippage(order, vol)
         fill_price = order.price + slippage if order.side == "buy" else order.price - slippage
         
+        # Session-based Liquidity / Fill Probability
+        liquidity_map = {
+            SessionType.ASIA: 0.8,
+            SessionType.LONDON: 1.0,
+            SessionType.NEW_YORK: 1.0,
+            SessionType.OVERLAP_LN_NY: 1.1,
+            SessionType.CLOSE: 0.1
+        }
+        fill_prob = liquidity_map.get(session, 1.0)
+        
+        # Determine actual fill size (partial fills in thin markets)
+        fill_size = order.size
+        if vol > 0.005 or fill_prob < 1.0:
+            actual_fill_ratio = float(np.random.uniform(max(0.05, fill_prob - 0.4), 1.0))
+            fill_size = order.size * actual_fill_ratio
+            
         return FillResult(
             order_id=order.id,
             fill_price=fill_price,
-            fill_size=order.size,
+            fill_size=fill_size,
             slippage=slippage,
-            commission=self.commission_per_lot * order.size,
+            commission=self.commission_per_lot * fill_size,
             timestamp=datetime.now()
         )

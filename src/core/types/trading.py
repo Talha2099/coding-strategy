@@ -70,3 +70,13 @@ class FillResult:
     slippage: float
     commission: float
     timestamp: datetime
+
+@dataclass
+class Position:
+    symbol: str
+    size: float  # Positive for long, negative for short
+    entry_price: float
+    stop_loss: float
+    take_profit: float
+    entry_ts: datetime
+    id: str = field(default_factory=lambda: "") # To link back to candidate

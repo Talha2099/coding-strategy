@@ -1,16 +1,37 @@
 import numpy as np
-from typing import Dict, List, Optional
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Tuple
 from .spec import AssetClass, InstrumentSpec
 
 class CrashProtectionModule:
     """
     Defensive layer to block trading during regime shifts or toxic volatility.
+    Supports dynamic scaling and cooldown periods.
     """
-    def __init__(self, vol_spike_threshold: float = 2.5):
+    def __init__(self, vol_spike_threshold: float = 2.5, cooldown_minutes: int = 60):
         self.vol_spike_threshold = vol_spike_threshold
+        self.cooldown_minutes = cooldown_minutes
         self.rolling_vol: Dict[str, List[float]] = {}
+        self.cooldowns: Dict[str, datetime] = {}
         
-    def should_block(self, symbol: str, current_vol: float, correlations: np.ndarray) -> Dict[str, any]:
+    def get_scaling_factor(self, symbol: str, current_vol: float) -> float:
+        """Returns a size multiplier between 0.0 and 1.0 based on volatility regime."""
+        if symbol not in self.rolling_vol or not self.rolling_vol[symbol]:
+            return 1.0
+        
+        avg_vol = np.mean(self.rolling_vol[symbol])
+        vol_ratio = current_vol / (avg_vol + 1e-9)
+        
+        if vol_ratio > self.vol_spike_threshold: return 0.0 # Hard block
+        if vol_ratio > 1.5: return 0.5 # De-risk
+        return 1.0
+
+    def should_block(self, symbol: str, current_vol: float, correlations: np.ndarray, now: datetime = None) -> Dict[str, any]:
+        # Check active cooldowns
+        if now and symbol in self.cooldowns:
+            if now < self.cooldowns[symbol]:
+                return {"block": True, "reason": "COOLDOWN_ACTIVE"}
+        
         if symbol not in self.rolling_vol:
             self.rolling_vol[symbol] = []
         
@@ -22,9 +43,10 @@ class CrashProtectionModule:
         
         # Detect Vola Spike
         if vol_ratio > self.vol_spike_threshold:
+            if now: self.cooldowns[symbol] = now + timedelta(minutes=self.cooldown_minutes)
             return {"block": True, "reason": "VOLATILITY_SPIKE", "ratio": vol_ratio}
             
-        # Detect Correlation Jump (simplified: if max off-diagonal is too high)
+        # Detect Correlation Jump
         if correlations.size > 1:
             max_corr = np.max(correlations - np.eye(correlations.shape[0]))
             if max_corr > 0.85:
@@ -36,7 +58,14 @@ class MultiAssetRiskEngine:
     def __init__(self, specs: Dict[str, InstrumentSpec]):
         self.specs = specs
         self.exposure: Dict[str, float] = {} # Symbol -> Position Size
+        self.class_exposure: Dict[AssetClass, float] = {ac: 0.0 for ac in AssetClass}
         self.daily_pnl: Dict[str, float] = {} 
+        
+        # Risk Limits
+        self.limit_per_class = {
+            AssetClass.CFD: 1.0, # 100% of equity
+            AssetClass.STOCK: 0.5, # 50% of equity
+        }
         
     def validate_trade(self, 
                        symbol: str, 
@@ -51,17 +80,23 @@ class MultiAssetRiskEngine:
             return False, "OVERNIGHT_FORBIDDEN"
             
         # 2. Max Exposure (Vol-Scaled)
-        notional_value = size * spec.contract_size * spec.point_value
-        if notional_value > equity * 0.5: # 50% max leverage per asset
+        notional_value = abs(size) * spec.contract_size * spec.point_value
+        if notional_value > equity * 0.5:
             return False, "MARGIN_LIMIT_EXCEEDED"
             
-        # 3. Shorting Constraints
+        # 3. Asset Class Limits
+        current_class_exp = self.class_exposure.get(spec.asset_class, 0.0)
+        class_limit = self.limit_per_class.get(spec.asset_class, 1.0) * equity
+        if current_class_exp + notional_value > class_limit:
+            return False, f"ASSET_CLASS_LIMIT_REACHED_{spec.asset_class.value}"
+            
+        # 4. Shorting Constraints
         if size < 0 and not spec.allow_short:
             return False, "SHORTING_FORBIDDEN"
             
-        # 4. Daily Drawdown Cap
+        # 5. Daily Drawdown Cap
         symbol_pnl = self.daily_pnl.get(symbol, 0.0)
-        if symbol_pnl < -(equity * 0.02): # 2% max loss per asset/session
+        if symbol_pnl < -(equity * 0.02):
             return False, "DAILY_SYMBOL_STOP_LOSS"
             
         return True, "SUCCESS"

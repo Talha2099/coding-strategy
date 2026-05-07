@@ -34,6 +34,11 @@ class InstrumentSpec(BaseModel):
     swap_long: float
     swap_short: float
     
+    # Corporate Actions (for Stocks)
+    dividend_yield: Optional[float] = 0.0 # Annualized or per-event
+    split_ratio: Optional[float] = 1.0
+    earnings_dates: Optional[List[datetime]] = []
+    
     # Constraints
     allow_overnight: bool = True
     allow_short: bool = True
