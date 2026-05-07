@@ -13,13 +13,13 @@ export interface FactorInsight {
 
 export const WORKFLOW_STAGES = [
   { id: 'ingest', name: 'Market Data Ingestion' },
-  { id: 'micro', name: 'Microstructure Feature Extraction' },
-  { id: 'regime', name: 'HMM Regime Classification' },
-  { id: 'attribution', name: 'Factor Attribution & Decay' },
-  { id: 'pattern', name: 'CNN-LSTM Pattern Recognition' },
-  { id: 'score', name: 'Meta-Model Probabilistic Scoring' },
-  { id: 'risk', name: 'Monte Carlo Risk Gating' },
-  { id: 'exec', name: 'SDE-Based Execution Optimization' }
+  { id: 'technical', name: 'Technical Engine Feature Extraction' },
+  { id: 'regime', name: 'Price Regime Classification' },
+  { id: 'router', name: 'Strategy Router Setup Matching' },
+  { id: 'backtest', name: 'Simulated Execution Environment' },
+  { id: 'analytics', name: 'Performance & Attribution Analytics' },
+  { id: 'risk', name: 'Portfolio Risk Management & Sizing' },
+  { id: 'exec', name: 'Order Execution Hub' }
 ];
 
 export class WorkflowSimulator {
@@ -30,47 +30,49 @@ export class WorkflowSimulator {
     // 1. Ingest
     onUpdate({ id: 'ingest', name: 'Market Data Ingestion', status: 'processing' });
     await new Promise(r => setTimeout(r, 600));
-    onUpdate({ id: 'ingest', name: 'Market Data Ingestion', status: 'completed', data: { symbol: 'BTCUSDT', source: 'YahooFinance' } });
+    onUpdate({ id: 'ingest', name: 'Market Data Ingestion', status: 'completed', data: { symbol: 'XAUUSD', source: 'HistoricalTick' } });
 
-    // 2. Micro
-    onUpdate({ id: 'micro', name: 'Microstructure Feature Extraction', status: 'processing' });
+    // 2. Technical Engine
+    onUpdate({ id: 'technical', name: 'Technical Engine Feature Extraction', status: 'processing' });
     await new Promise(r => setTimeout(r, 400));
-    onUpdate({ id: 'micro', name: 'Microstructure Feature Extraction', status: 'completed', data: { ofi: 0.42, imbalance: -0.12, spread: 0.0001 } });
+    onUpdate({ id: 'technical', name: 'Technical Engine Feature Extraction', status: 'completed', data: { sma: 2042.1, atr: 5.4, zscore: 1.8 } });
 
     // 3. Regime
-    onUpdate({ id: 'regime', name: 'HMM Regime Classification', status: 'processing' });
+    onUpdate({ id: 'regime', name: 'Price Regime Classification', status: 'processing' });
     await new Promise(r => setTimeout(r, 500));
-    const regime = params.regime > 0.5 ? 'TRENDING' : 'MEAN_REVERSION';
-    onUpdate({ id: 'regime', name: 'HMM Regime Classification', status: 'completed', data: { state: regime, confidence: 0.88 + (params.regime * 0.1) } });
+    const regimes = ['TRENDING_BULL', 'BREAKOUT', 'RANGING', 'TRENDING_BEAR'];
+    const idx = Math.floor(params.regime * 3.9);
+    const regime = regimes[idx];
+    onUpdate({ id: 'regime', name: 'Price Regime Classification', status: 'completed', data: { state: regime, confidence: 0.82 + (params.regime * 0.1) } });
 
-    // 3.1 NEW: Factor Attribution
-    onUpdate({ id: 'attribution', name: 'Factor Attribution & Decay', status: 'processing' });
+    // 4. Router
+    onUpdate({ id: 'router', name: 'Strategy Router Setup Matching', status: 'processing' });
     await new Promise(r => setTimeout(r, 800));
-    onUpdate({ id: 'attribution', name: 'Factor Attribution & Decay', status: 'completed', data: { 
-      'OFI_Edge': '0.12 IC (Stable)',
-      'Vola_Drift': '-0.02 IC (Degrading)',
-      'SMC_Sync': '0.18 IC (Healthy)' 
+    onUpdate({ id: 'router', name: 'Strategy Router Setup Matching', status: 'completed', data: { 
+      'Breakout_Family': 'Detected',
+      'Mean_Rev_Family': 'Dormant',
+      'Pullback_Family': 'Preparing' 
     } });
 
-    // 4. Pattern
-    onUpdate({ id: 'pattern', name: 'CNN-LSTM Pattern Recognition', status: 'processing' });
+    // 5. Backtest
+    onUpdate({ id: 'backtest', name: 'Simulated Execution Environment', status: 'processing' });
     await new Promise(r => setTimeout(r, 700));
-    onUpdate({ id: 'pattern', name: 'CNN-LSTM Pattern Recognition', status: 'completed', data: { label: 'BULLISH_REVERSAL', score: 0.74 } });
+    onUpdate({ id: 'backtest', name: 'Simulated Execution Environment', status: 'completed', data: { trades_found: 3, pnl_est: '+12.5 bps' } });
 
-    // 5. Score
-    onUpdate({ id: 'score', name: 'Meta-Model Probabilistic Scoring', status: 'processing' });
+    // 6. Analytics
+    onUpdate({ id: 'analytics', name: 'Performance & Attribution Analytics', status: 'processing' });
     await new Promise(r => setTimeout(r, 400));
-    onUpdate({ id: 'score', name: 'Meta-Model Probabilistic Scoring', status: 'completed', data: { final_prob: 0.68, expected_return: '14.2 bps' } });
+    onUpdate({ id: 'analytics', name: 'Performance & Attribution Analytics', status: 'completed', data: { win_rate: '64.2%', profit_factor: 2.14 } });
 
-    // 6. Risk
-    onUpdate({ id: 'risk', name: 'Monte Carlo Risk Gating', status: 'processing' });
+    // 7. Risk
+    onUpdate({ id: 'risk', name: 'Portfolio Risk Management & Sizing', status: 'processing' });
     await new Promise(r => setTimeout(r, 800));
-    const kelly = (0.12 * (params.risk / 50)).toFixed(2);
-    onUpdate({ id: 'risk', name: 'Monte Carlo Risk Gating', status: 'completed', data: { kelly_fraction: `${kelly}x`, sim_survival: '99.9%' } });
+    const size = (0.2 * (params.risk / 50)).toFixed(2);
+    onUpdate({ id: 'risk', name: 'Portfolio Risk Management & Sizing', status: 'completed', data: { pos_size: `${size} lots`, VaR: '1.2%' } });
 
-    // 7. Exec
-    onUpdate({ id: 'exec', name: 'SDE-Based Execution Optimization', status: 'processing' });
+    // 8. Exec
+    onUpdate({ id: 'exec', name: 'Order Execution Hub', status: 'processing' });
     await new Promise(r => setTimeout(r, 400));
-    onUpdate({ id: 'exec', name: 'SDE-Based Execution Optimization', status: 'completed', data: { order_type: 'LIMIT', slippage_est: '0.2 bps' } });
+    onUpdate({ id: 'exec', name: 'Order Execution Hub', status: 'completed', data: { order_type: 'STOP_LIMIT', route: 'LMAX' } });
   }
 }

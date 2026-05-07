@@ -24,7 +24,9 @@ export interface TradeCandidate {
   id: string;
   symbol: string;
   side: 1 | -1;
-  scenarioType: string;
+  strategyName: string;
+  strategyFamily: string;
+  regime: string;
   entryTime: string;
   entryPrice: number;
   stopLoss: number;
@@ -76,41 +78,47 @@ export const MOCK_ZONES: Zone[] = [
 export const MOCK_TRADES: TradeCandidate[] = [
   {
     id: 't1',
-    symbol: 'BTCUSDT',
+    symbol: 'XAUUSD',
     side: 1,
-    scenarioType: 'liquidity_sweep_reversal',
+    strategyName: 'DonchianBreakout',
+    strategyFamily: 'Breakout',
+    regime: 'BREAKOUT',
     entryTime: subHours(new Date(), 2).toISOString(),
-    entryPrice: 65150,
-    stopLoss: 64950,
-    takeProfit: 66500,
+    entryPrice: 2045.50,
+    stopLoss: 2038.20,
+    takeProfit: 2060.00,
     score: 8.5,
-    probability: 0.72,
+    probability: 0.82,
     status: 'executed',
   },
   {
     id: 't2',
-    symbol: 'BTCUSDT',
+    symbol: 'GBPUSD',
     side: -1,
-    scenarioType: 'break_and_retest',
+    strategyName: 'BollingerMR',
+    strategyFamily: 'Mean Reversion',
+    regime: 'RANGING',
     entryTime: subHours(new Date(), 5).toISOString(),
-    entryPrice: 67200,
-    stopLoss: 67500,
-    takeProfit: 66000,
+    entryPrice: 1.2650,
+    stopLoss: 1.2685,
+    takeProfit: 1.2580,
     score: 7.2,
-    probability: 0.65,
+    probability: 0.68,
     status: 'closed',
   },
   {
     id: 't3',
-    symbol: 'ETHUSDT',
+    symbol: 'BTCUSDT',
     side: 1,
-    scenarioType: 'level_respect_continuation',
+    strategyName: 'VWAPPullback',
+    strategyFamily: 'Pullback',
+    regime: 'TRENDING BULL',
     entryTime: subHours(new Date(), 1).toISOString(),
-    entryPrice: 3450,
-    stopLoss: 3420,
-    takeProfit: 3600,
+    entryPrice: 65150,
+    stopLoss: 64800,
+    takeProfit: 67000,
     score: 9.1,
-    probability: 0.81,
+    probability: 0.79,
     status: 'pending',
   },
 ];

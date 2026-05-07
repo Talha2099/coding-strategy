@@ -13,11 +13,11 @@ interface Factor {
 }
 
 export function FactorHealth() {
-  const [factors, setFactors] = React.useState<Factor[]>([
-    { name: 'OFI Imbalance', ic: 0.14, decay: 0.01, status: 'HEALTHY' },
-    { name: 'HMM Regime Sync', ic: 0.22, decay: -0.02, status: 'HEALTHY' },
-    { name: 'Vola Cluster', ic: 0.08, decay: 0.04, status: 'DEGRADING' },
-    { name: 'Entropy Filter', ic: 0.11, decay: 0.00, status: 'STABLE' },
+  const [strategies, setStrategies] = React.useState([
+    { name: 'Breakout Engine', winRate: 68.2, sharpe: 2.4, status: 'HEALTHY' },
+    { name: 'Mean Reversion', winRate: 54.1, sharpe: 1.8, status: 'STABLE' },
+    { name: 'Pullback Unit', winRate: 72.5, sharpe: 3.1, status: 'HEALTHY' },
+    { name: 'Gap Analytics', winRate: 48.9, sharpe: 0.9, status: 'DEGRADING' },
   ]);
 
   return (
@@ -25,36 +25,36 @@ export function FactorHealth() {
       <div className="flex justify-between items-center">
         <h3 className="text-white text-[10px] font-bold uppercase tracking-widest flex items-center gap-2">
           <Fingerprint size={14} className="text-[#00FF00]" />
-          Alpha Factor Vitality
+          Strategy Family Health
         </h3>
         <ShieldCheck size={14} className="text-[#8E9299]" />
       </div>
 
       <div className="space-y-5">
-        {factors.map((factor) => (
-          <div key={factor.name} className="group">
+        {strategies.map((strat) => (
+          <div key={strat.name} className="group">
             <div className="flex justify-between items-end mb-2">
               <div className="space-y-0.5">
-                <span className="text-[10px] text-white font-bold uppercase tracking-tighter">{factor.name}</span>
+                <span className="text-[10px] text-white font-bold uppercase tracking-tighter">{strat.name}</span>
                 <div className="flex items-center gap-2">
                   <span className={cn(
                     "text-[9px] px-1.5 py-0.5 rounded-full border",
-                    factor.status === 'HEALTHY' ? "bg-[#00FF00]/10 text-[#00FF00] border-[#00FF00]/20" :
-                    factor.status === 'DEGRADING' ? "bg-orange-500/10 text-orange-500 border-orange-500/20" :
+                    strat.status === 'HEALTHY' ? "bg-[#00FF00]/10 text-[#00FF00] border-[#00FF00]/20" :
+                    strat.status === 'DEGRADING' ? "bg-red-500/10 text-red-500 border-red-500/20" :
                     "bg-blue-500/10 text-blue-400 border-blue-500/20"
                   )}>
-                    {factor.status}
+                    {strat.status}
                   </span>
-                  {factor.decay > 0.02 && <AlertTriangle size={10} className="text-orange-500 animate-pulse" />}
+                  {strat.status === 'DEGRADING' && <AlertTriangle size={10} className="text-red-500 animate-pulse" />}
                 </div>
               </div>
               <div className="text-right">
-                <span className="text-xs text-white font-mono">IC: {factor.ic.toFixed(2)}</span>
+                <span className="text-xs text-white font-mono">WR: {strat.winRate}%</span>
                 <p className={cn(
                   "text-[8px] font-mono",
-                  factor.decay > 0 ? "text-orange-500" : "text-[#00FF00]"
+                  strat.sharpe > 2.0 ? "text-[#00FF00]" : "text-gray-500"
                 )}>
-                  Drift: {factor.decay > 0 ? '+' : ''}{(factor.decay * 100).toFixed(1)}%
+                  Sharpe: {strat.sharpe.toFixed(1)}
                 </p>
               </div>
             </div>
@@ -62,11 +62,11 @@ export function FactorHealth() {
             <div className="h-1 w-full bg-black/40 rounded-full overflow-hidden border border-[#2A2B2F]">
               <motion.div 
                 initial={{ width: 0 }}
-                animate={{ width: `${factor.ic * 300}%` }}
+                animate={{ width: `${strat.winRate}%` }}
                 className={cn(
                   "h-full rounded-full transition-all duration-1000",
-                  factor.status === 'HEALTHY' ? "bg-[#00FF00]" : 
-                  factor.status === 'DEGRADING' ? "bg-orange-500" : 
+                  strat.status === 'HEALTHY' ? "bg-[#00FF00]" : 
+                  strat.status === 'DEGRADING' ? "bg-red-500" : 
                   "bg-blue-400"
                 )}
               />
@@ -76,8 +76,8 @@ export function FactorHealth() {
       </div>
 
       <div className="pt-4 border-t border-[#2A2B2F] flex items-center justify-between">
-        <span className="text-[9px] text-[#8E9299] uppercase font-mono italic">Recalibrating in 120s...</span>
-        <button className="text-[9px] font-bold text-white hover:text-[#00FF00] transition-colors uppercase">Details →</button>
+        <span className="text-[9px] text-[#8E9299] uppercase font-mono italic">Awaiting Next Session Open...</span>
+        <button className="text-[9px] font-bold text-white hover:text-[#00FF00] transition-colors uppercase">All Stats →</button>
       </div>
     </div>
   );

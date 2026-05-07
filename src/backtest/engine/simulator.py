@@ -13,35 +13,38 @@ from src.risk.asset_aware_risk import MultiAssetRiskEngine, CrashProtectionModul
 from src.execution.engine.base import ExecutionEngine
 from src.core.contracts.spec import ContractManager, SessionType
 from src.indicators.trend_filter import TrendModule
-from src.ml.pattern_recognition.model import PatternRecognizer
-from src.core.analytics.factor_engine import FactorEngine
+from src.core.types.strategy import TradeIdea, RegimeType, StrategyFamily
+from src.regime.engine import RegimeEngine
+from src.strategies.registry import StrategyRouter
+from src.core.analytics.reporting import PerformanceReporter
 
 class EventDrivenBacktester:
     def __init__(self, 
                  contract_manager: ContractManager,
-                 micro_engine: MicrostructureEngine,
-                 fusion_engine: FeatureFusionEngine,
-                 meta_model: MetaModel,
                  risk_engine: MultiAssetRiskEngine,
                  exec_engine: ExecutionEngine,
-                 trend_module: TrendModule,
+                 regime_engine: RegimeEngine,
+                 strategy_router: StrategyRouter,
                  crash_module: CrashProtectionModule):
         self.contract_manager = contract_manager
-        self.micro_engine = micro_engine
-        self.fusion_engine = fusion_engine
-        self.meta_model = meta_model
         self.risk_engine = risk_engine
         self.exec_engine = exec_engine
-        self.trend_module = trend_module
+        self.regime_engine = regime_engine
+        self.strategy_router = strategy_router
         self.crash_module = crash_module
-        self.factor_engine = FactorEngine()
         
         self.history = []
         self.equity_curve = [100000.0]
         self.current_positions: Dict[str, float] = {} # Summary for financing
         self.open_positions: List[Position] = [] # Granular tracking
         self.price_history: Dict[str, List[float]] = {}
+        self.candle_history: Dict[str, List[Candle]] = {}
         self.last_ts: Dict[str, datetime] = {}
+        
+        # Strategy Tracking
+        self.strategy_pnl: Dict[str, float] = {} # Strategy Name -> PnL
+        self.family_pnl: Dict[StrategyFamily, float] = {sf: 0.0 for sf in StrategyFamily}
+        
         self.pnl_stats = {
             "gross_pnl": 0.0,
             "net_pnl": 0.0,
@@ -55,6 +58,7 @@ class EventDrivenBacktester:
         symbol = tick.symbol
         if symbol not in self.price_history: 
             self.price_history[symbol] = []
+            self.candle_history[symbol] = []
             self.last_ts[symbol] = tick.ts
         
         # 0. Gap Detection
@@ -63,21 +67,25 @@ class EventDrivenBacktester:
             self._handle_gap(symbol, tick.price, tick.ts)
         self.last_ts[symbol] = tick.ts
 
-        self.micro_engine.update_trades(tick)
         self.price_history[symbol].append(tick.price)
         if len(self.price_history[symbol]) > 100: self.price_history[symbol].pop(0)
         
-        spec = self.contract_manager.get_spec(symbol)
-        session = self.contract_manager.get_session(tick.ts) # Changed ts to match Tick type
+        # 0.1 Update Candles (Simplified: 1 minute candles)
+        self._update_candles(tick)
         
-        # 1. Check Exits (Realistic market-price exits)
+        spec = self.contract_manager.get_spec(symbol)
+        session = self.contract_manager.get_session(tick.ts)
+        
+        # 1. Check Exits
         self._check_exits(tick)
 
-        # 2. Factor Analysis update (Forward returns tracking)
-        # This belongs in a buffer that waits for future price action
+        # 2. Regime Analysis
+        regime = self.regime_engine.classify(self.candle_history[symbol]) if len(self.candle_history[symbol]) >= 20 else RegimeType.VOLATILE_UNSTABLE
         
-        # 3. Trend Analysis
-        trend_state = self.trend_module.get_trend_state(symbol, tick.price, self.price_history[symbol])
+        # 3. Strategy Scan
+        ideas = self.strategy_router.get_trade_ideas(symbol, self.candle_history[symbol], regime)
+        for idea in ideas:
+            self.process_trade_idea(idea, tick.ts)
         
         # 4. Financing & Corporate Actions Check (at 22:00 UTC)
         if tick.ts.hour == 22 and tick.ts.minute == 0:
@@ -87,9 +95,85 @@ class EventDrivenBacktester:
         self.history.append({
             "ts": tick.ts,
             "session": session,
-            "trend": trend_state,
+            "regime": regime,
             "price": tick.price
         })
+
+    def _update_candles(self, tick: Tick):
+        """Builds 1-min candles from ticks."""
+        symbol = tick.symbol
+        ts_minute = tick.ts.replace(second=0, microsecond=0)
+        
+        if not self.candle_history[symbol] or self.candle_history[symbol][-1].ts != ts_minute:
+            new_candle = Candle(ts=ts_minute, open=tick.price, high=tick.price, low=tick.price, close=tick.price, volume=tick.size)
+            self.candle_history[symbol].append(new_candle)
+            if len(self.candle_history[symbol]) > 500: self.candle_history[symbol].pop(0)
+        else:
+            c = self.candle_history[symbol][-1]
+            updated_candle = Candle(
+                ts=c.ts,
+                open=c.open,
+                high=max(c.high, tick.price),
+                low=min(c.low, tick.price),
+                close=tick.price,
+                volume=c.volume + tick.size
+            )
+            self.candle_history[symbol][-1] = updated_candle
+
+    def process_trade_idea(self, idea: TradeIdea, dt: datetime):
+        symbol = idea.symbol
+        spec = self.contract_manager.get_spec(symbol)
+        session = self.contract_manager.get_session(dt)
+        
+        # 1. Crash Protection
+        vol = (self.price_history[symbol][-1] * 0.001) if len(self.price_history[symbol]) > 0 else 0.0001
+        crash_status = self.crash_module.should_block(symbol, vol, np.eye(1))
+        if crash_status["block"]:
+            return "REJECTED_CRASH_DEFENSE"
+
+        # 2. Risk & Sizing
+        # We need a stop distance for sizing
+        stop_dist = abs(idea.entry_price - idea.stop_loss)
+        if stop_dist == 0: return "REJECTED_ZERO_STOP"
+        
+        size = self.risk_engine.get_position_sizing(symbol, vol, self.equity_curve[-1], stop_dist)
+        
+        valid, msg = self.risk_engine.validate_trade(idea, size, self.equity_curve[-1])
+        if not valid: return f"REJECTED_RISK_{msg}"
+        
+        # 3. Execution
+        order = ExecutionOrder(
+            id=uuid.uuid4().hex, 
+            symbol=symbol, 
+            side="buy" if idea.direction == "long" else "sell", 
+            price=idea.entry_price, 
+            size=size, 
+            type="market",
+            timestamp=dt
+        )
+        fill = self.exec_engine.execute(order, session, vol)
+        
+        # Update Stats
+        self.pnl_stats["commissions"] += fill.commission
+        self.pnl_stats["slippage_total"] += fill.slippage * abs(fill.fill_size) * spec.contract_size * spec.point_value
+        self.pnl_stats["net_pnl"] -= fill.commission
+
+        pos_size = size if idea.direction == "long" else -size
+        new_pos = Position(
+            symbol=symbol,
+            size=pos_size,
+            entry_price=fill.fill_price,
+            stop_loss=idea.stop_loss,
+            take_profit=idea.take_profit,
+            entry_ts=dt,
+            id=idea.strategy_name # Link to strategy for attribution
+        )
+        self.open_positions.append(new_pos)
+        self.current_positions[symbol] = self.current_positions.get(symbol, 0.0) + pos_size
+        self.equity_curve.append(self.equity_curve[-1] - fill.commission)
+        
+        # Strategy Attribution: record that a position was opened
+        return "EXECUTED"
 
     def _check_exits(self, tick: Tick):
         still_open = []
@@ -143,16 +227,38 @@ class EventDrivenBacktester:
 
     def _close_position(self, pos: Position, exit_price: float, ts: datetime, reason: str):
         spec = self.contract_manager.get_spec(pos.symbol)
+        session = self.contract_manager.get_session(ts)
+        vol = (self.price_history[pos.symbol][-1] * 0.001) if len(self.price_history[pos.symbol]) > 0 else 0.0001
         
-        # Realistic PnL: (Exit - Entry) * Size * ContractSize * PointValue
-        price_diff = (exit_price - pos.entry_price)
-        if pos.size < 0: price_diff *= -1 # Short logic
+        # 1. Execution for exit
+        side = "sell" if pos.size > 0 else "buy"
+        order_type = "stop" if reason in ["SL", "GAP_EXIT"] else "market"
         
-        raw_pnl = price_diff * abs(pos.size) * spec.contract_size * spec.point_value
+        order = ExecutionOrder(
+            id=uuid.uuid4().hex,
+            symbol=pos.symbol,
+            side=side,
+            type=order_type,
+            price=exit_price,
+            size=abs(pos.size),
+            timestamp=ts
+        )
+        fill = self.exec_engine.execute(order, session, vol)
+        
+        # 2. Realistic PnL Calculation
+        raw_pnl = (fill.fill_price - pos.entry_price) * pos.size * spec.contract_size * spec.point_value
+        
+        # Strategy Attribution
+        strat_name = pos.id
+        self.strategy_pnl[strat_name] = self.strategy_pnl.get(strat_name, 0.0) + raw_pnl
+        
+        # Update Stats
         self.pnl_stats["gross_pnl"] += raw_pnl
-        self.pnl_stats["net_pnl"] += raw_pnl
-        
-        self.equity_curve.append(self.equity_curve[-1] + raw_pnl)
+        self.pnl_stats["net_pnl"] += (raw_pnl - fill.commission)
+        self.pnl_stats["commissions"] += fill.commission
+        self.pnl_stats["slippage_total"] += fill.slippage * abs(pos.size) * spec.contract_size * spec.point_value
+
+        self.equity_curve.append(self.equity_curve[-1] + raw_pnl - fill.commission)
         self.current_positions[pos.symbol] -= pos.size
         
         self.history.append({
@@ -160,74 +266,22 @@ class EventDrivenBacktester:
             "reason": reason,
             "symbol": pos.symbol,
             "pnl": raw_pnl,
-            "ts": ts
+            "ts": ts,
+            "strategy": strat_name
         })
 
-    def process_candidate(self, candidate: TradeCandidate, dt: datetime):
-        symbol = candidate.symbol
-        spec = self.contract_manager.get_spec(symbol)
-        session = self.contract_manager.get_session(dt)
-        
-        # 1. Crash Protection
-        vol = (self.history[-1]["tick"].price * 0.001) if self.history else 0.0001
-        crash_status = self.crash_module.should_block(symbol, vol, np.eye(1))
-        if crash_status["block"]:
-            return "REJECTED_CRASH_DEFENSE"
-
-        # 2. Trend Filtering
-        trend = self.history[-1]["trend"]
-        if candidate.direction == "long" and trend["direction"] != 1:
-            return "REJECTED_TREND_MISMATCH"
-            
-        # 3. Meta-Model Scoring
-        micro_features = self.micro_engine.compute_features()
-        features = self.fusion_engine.build_feature_vector(candidate, micro_features, {
-            "trend_strength": trend["strength"],
-            "session": session.value,
-            "asset_class": spec.asset_class.value
-        })
-        prob = self.meta_model.predict(features)
-        if prob < 0.6: return "REJECTED_META_LABEL"
-
-        # 4. Risk & Sizing
-        valid, msg = self.risk_engine.validate_trade(symbol, 1.0, True, self.equity_curve[-1])
-        if not valid: return f"REJECTED_RISK_{msg}"
-        
-        size = self.risk_engine.get_position_sizing(symbol, vol, self.equity_curve[-1], candidate.stop_dist)
-        
-        # 5. Execution
-        order = ExecutionOrder(id=uuid.uuid4().hex, symbol=symbol, side="buy" if candidate.direction == "long" else "sell", price=candidate.entry_zone, size=size, type="market")
-        fill = self.exec_engine.execute(order, session, vol)
-        
-        # Update Stats
-        self.pnl_stats["commissions"] += fill.commission
-        self.pnl_stats["slippage_total"] += fill.slippage * abs(fill.fill_size) * spec.contract_size * spec.point_value
-        self.pnl_stats["net_pnl"] -= fill.commission
-
-        pos_size = size if candidate.direction == "long" else -size
-        new_pos = Position(
-            symbol=symbol,
-            size=pos_size,
-            entry_price=fill.fill_price,
-            stop_loss=candidate.stop_loss,
-            take_profit=candidate.take_profit,
-            entry_ts=dt,
-            id=candidate.id
-        )
-        self.open_positions.append(new_pos)
-        self.current_positions[symbol] = self.current_positions.get(symbol, 0.0) + pos_size
-        self.equity_curve.append(self.equity_curve[-1] - fill.commission)
-        
-        return "EXECUTED"
-
-    def run(self, events: List[Dict]):
+    def run(self, ticks: List[Tick]):
         """
-        Simple event loop. In research, events would be sorted by timestamp.
+        Main backtest loop.
         """
-        for event in events:
-            if event["type"] == "tick":
-                self.on_tick(event["data"])
-            elif event["type"] == "orderbook":
-                self.on_orderbook(event["data"])
-            elif event["type"] == "candidate":
-                self.process_candidate(event["data"])
+        for tick in ticks:
+            self.on_tick(tick)
+        
+        return self.get_summary()
+
+    def get_summary(self) -> Dict:
+        report = PerformanceReporter.generate_report(self.history, self.equity_curve)
+        return {
+            "pnl_stats": self.pnl_stats,
+            "report": report
+        }

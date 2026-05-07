@@ -57,7 +57,7 @@ class ExecutionOrder:
     id: str
     symbol: str
     side: str
-    type: Literal["market", "limit"]
+    type: Literal["market", "limit", "stop"]
     price: Optional[float]
     size: float
     timestamp: datetime

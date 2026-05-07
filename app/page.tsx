@@ -88,7 +88,7 @@ export default function DashboardPage() {
         {/* Header */}
         <header id="dashboard-header" className="h-16 border-b border-[#2A2B2F] bg-[#0A0B0D]/90 backdrop-blur-xl sticky top-0 z-50 px-8 flex items-center justify-between">
           <div className="flex items-center gap-6 flex-1">
-            <h1 className="text-white font-sans font-bold tracking-tighter text-xl uppercase italic">QuantPortal</h1>
+            <h1 className="text-white font-sans font-bold tracking-tighter text-xl uppercase italic">TraderSuit Pro</h1>
             <div className="flex gap-1">
               {['Market View', 'Pipeline', 'Research'].map(tab => (
                 <button 
@@ -157,7 +157,7 @@ export default function DashboardPage() {
                       <h2 className="text-white text-sm font-bold uppercase tracking-widest flex items-center gap-2">
                         Execution Pipeline
                       </h2>
-                      <p className="text-[#8E9299] text-[10px] font-mono mt-1 italic leading-none">Automated Step-by-Step System Diagnostics</p>
+                      <p className="text-[#8E9299] text-[10px] font-mono mt-1 italic leading-none">Multi-Strategy Technical Backtest & Analysis</p>
                     </div>
                   </div>
                   <div className="flex gap-2">
@@ -206,8 +206,8 @@ export default function DashboardPage() {
                           >
                             <div className="w-24 h-24 rounded-full border-4 border-[#00FF00]/20 border-t-[#00FF00] animate-spin mx-auto" />
                             <div className="space-y-2">
-                              <h3 className="text-[#00FF00] font-mono text-xl animate-pulse">SYSTEM_IN_LOOP</h3>
-                              <p className="text-gray-500 text-xs italic">Executing mathematical abstractions onto live time-series...</p>
+                    <h3 className="text-[#00FF00] font-mono text-xl animate-pulse">STRATEGY_RUNNER_ACTIVE</h3>
+                    <p className="text-gray-500 text-xs italic">Simulating technical setups across multi-regime time-series...</p>
                             </div>
                           </motion.div>
                         ) : steps.length === WORKFLOW_STAGES.length ? (
@@ -223,12 +223,12 @@ export default function DashboardPage() {
                             <h3 className="text-white font-bold text-2xl tracking-tighter uppercase italic">Optimized Verdict</h3>
                             <div className="grid grid-cols-2 gap-4 max-w-sm mx-auto mt-6">
                               <div className="bg-[#151619] p-4 rounded-xl border border-[#2A2B2F]">
-                                <span className="text-[10px] uppercase text-[#8E9299] block mb-1">Signal Score</span>
-                                <span className="text-2xl text-white font-mono">0.94</span>
-                              </div>
-                              <div className="bg-[#151619] p-4 rounded-xl border border-[#2A2B2F]">
-                                <span className="text-[10px] uppercase text-[#8E9299] block mb-1">Risk Buffer</span>
-                                <span className="text-2xl text-white font-mono">1.4x</span>
+                    <span className="text-[10px] uppercase text-[#8E9299] block mb-1">Profit Factor</span>
+                    <span className="text-2xl text-white font-mono">2.14x</span>
+                  </div>
+                  <div className="bg-[#151619] p-4 rounded-xl border border-[#2A2B2F]">
+                    <span className="text-[10px] uppercase text-[#8E9299] block mb-1">Win Rate</span>
+                    <span className="text-2xl text-white font-mono">64%</span>
                               </div>
                             </div>
                           </motion.div>
@@ -297,7 +297,7 @@ export default function DashboardPage() {
                 <div className="flex justify-between items-center">
                   <h3 className="text-white text-[10px] font-bold uppercase tracking-widest flex items-center gap-2">
                     <Binary size={14} className="text-[#00FF00]" />
-                    Interactive Engine Parameters
+                    Strategy Allocation & Risk
                   </h3>
                 </div>
                 
@@ -315,7 +315,7 @@ export default function DashboardPage() {
                       onChange={(e) => setRiskBias(parseInt(e.target.value))}
                       className="w-full h-1 bg-black rounded-lg appearance-none cursor-pointer accent-[#00FF00]"
                     />
-                    <p className="text-[9px] text-gray-600 italic">Adjusts Kelly fraction capping and MC survival thresholds.</p>
+                    <p className="text-[9px] text-gray-600 italic">Global risk threshold for drawdown capping logic.</p>
                   </div>
 
                   <div className="space-y-3">
@@ -332,7 +332,7 @@ export default function DashboardPage() {
                       onChange={(e) => setRegimeSensitivity(parseFloat(e.target.value))}
                       className="w-full h-1 bg-black rounded-lg appearance-none cursor-pointer accent-[#00FF00]"
                     />
-                    <p className="text-[9px] text-gray-600 italic">Weighting of HMM states vs Microstructure OFI signals.</p>
+                    <p className="text-[9px] text-gray-600 italic">Sensitivity of the Regime Engine to volatility spikes.</p>
                   </div>
                 </div>
 

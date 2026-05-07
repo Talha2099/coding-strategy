@@ -4,10 +4,10 @@ import React from 'react';
 import { TrendingUp, Activity, Binary, ShieldCheck, Zap, Cpu } from 'lucide-react';
 
 const stats = [
-  { label: 'GARCH(1,1) Vol', value: '0.0012', trend: 'Forecasted', icon: Activity, color: 'text-blue-400' },
-  { label: 'HMM Confidence', value: '88.4%', trend: 'State: RANGE', icon: Cpu, color: 'text-[#00FF00]' },
-  { label: 'Kelly Fraction', value: '0.12x', trend: 'Risk Capped', icon: ShieldCheck, color: 'text-orange-400' },
-  { label: 'Exp. Return', value: '+14.2 bps', trend: 'MC Filtered', icon: Zap, color: 'text-[#00FF00]' },
+  { label: 'Active Strategies', value: '12 Unit', trend: 'Multi-Asset', icon: Binary, color: 'text-blue-400' },
+  { label: 'Avg Win Rate', value: '64.2%', trend: 'Last 30D', icon: ShieldCheck, color: 'text-[#00FF00]' },
+  { label: 'Profit Factor', value: '2.14x', trend: 'All Systems', icon: TrendingUp, color: 'text-[#00FF00]' },
+  { label: 'Max Drawdown', value: '-4.8%', trend: 'Var Model', icon: Activity, color: 'text-red-400' },
 ];
 
 export function StatsBar() {

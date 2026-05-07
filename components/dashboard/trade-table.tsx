@@ -20,10 +20,10 @@ export function TradeTable() {
         <table className="w-full text-left">
           <thead>
             <tr className="border-b border-[#2A2B2F]">
-              <th className="px-4 py-3 text-[#8E9299] font-mono italic text-[10px] uppercase tracking-wider">Asset / Scenario</th>
+              <th className="px-4 py-3 text-[#8E9299] font-mono italic text-[10px] uppercase tracking-wider">Strategy / Regime</th>
               <th className="px-4 py-3 text-[#8E9299] font-mono italic text-[10px] uppercase tracking-wider">Entry Detail</th>
               <th className="px-4 py-3 text-[#8E9299] font-mono italic text-[10px] uppercase tracking-wider">Risk / Reward</th>
-              <th className="px-4 py-3 text-[#8E9299] font-mono italic text-[10px] uppercase tracking-wider">ML Score</th>
+              <th className="px-4 py-3 text-[#8E9299] font-mono italic text-[10px] uppercase tracking-wider">Conf. Score</th>
               <th className="px-4 py-3 text-[#8E9299] font-mono italic text-[10px] uppercase tracking-wider">Status</th>
               <th className="px-4 py-3"></th>
             </tr>
@@ -45,7 +45,7 @@ export function TradeTable() {
                     </div>
                     <div>
                       <p className="text-white text-sm font-medium">{trade.symbol}</p>
-                      <p className="text-[#8E9299] text-[10px] font-mono truncate max-w-[120px]">{trade.scenarioType.replace(/_/g, ' ')}</p>
+                      <p className="text-[#8E9299] text-[10px] font-mono truncate max-w-[150px]">{trade.strategyName} | {trade.regime}</p>
                     </div>
                   </div>
                 </td>

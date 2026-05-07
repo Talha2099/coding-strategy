@@ -4,11 +4,12 @@ Research-grade, microstructure-aware trading system based on Smart Money Concept
 
 ## Features
 
-- **Deterministic Alpha**: Rule-based SMC signal generation (Liquidity sweeps, BOS, CHoCH).
+- **Multi-Strategy System**: Modular framework for Breakout, Pullback, Mean Reversion, Range, and Gap trading.
+- **Regime Engine**: Deterministic classification of market states (Trending, Ranging, Volatile) using technical indicators.
 - **Microstructure Intelligence**: Order-flow imbalance (OFI), Depth imbalance, and dynamic slippage modeling.
-- **Meta-Labeling**: ML filtering layer to reduce false positives from the base strategy.
-- **Event-Driven Backtester**: Realistic fill simulation with spread and commission impact.
-- **Research Registry**: Versioned feature and experiment tracking for reproducible quant workflows.
+- **Asset-Aware Risk**: Multi-asset class support (CFDs, Stocks) with strategy-family limits and crash protection.
+- **Technical Feature Engine**: Standalone indicator suite (EMA, SMA, ATR, RSI, Bollinger, Donchian, VWAP).
+- **Event-Driven Backtester**: Realistic fill simulation with session awareness, gaps, and commissions.
 
 ## Pipeline Architecture
 

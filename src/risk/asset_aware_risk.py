@@ -2,6 +2,7 @@ import numpy as np
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from .spec import AssetClass, InstrumentSpec
+from src.core.types.strategy import TradeIdea, StrategyFamily
 
 class CrashProtectionModule:
     """
@@ -59,6 +60,7 @@ class MultiAssetRiskEngine:
         self.specs = specs
         self.exposure: Dict[str, float] = {} # Symbol -> Position Size
         self.class_exposure: Dict[AssetClass, float] = {ac: 0.0 for ac in AssetClass}
+        self.strategy_exposure: Dict[StrategyFamily, float] = {sf: 0.0 for sf in StrategyFamily}
         self.daily_pnl: Dict[str, float] = {} 
         
         # Risk Limits
@@ -66,16 +68,24 @@ class MultiAssetRiskEngine:
             AssetClass.CFD: 1.0, # 100% of equity
             AssetClass.STOCK: 0.5, # 50% of equity
         }
+        self.limit_per_strategy = {
+            StrategyFamily.BREAKOUT: 0.3,
+            StrategyFamily.PULLBACK: 0.4,
+            StrategyFamily.MEAN_REVERSION: 0.2,
+            StrategyFamily.RANGE: 0.2,
+            StrategyFamily.GAP: 0.1
+        }
         
     def validate_trade(self, 
-                       symbol: str, 
+                       idea: TradeIdea,
                        size: float, 
-                       is_overnight: bool, 
                        equity: float) -> Tuple[bool, str]:
+        symbol = idea.symbol
         spec = self.specs.get(symbol)
         if not spec: return False, "INSTRUMENT_NOT_FOUND"
         
         # 1. Overnight Check
+        is_overnight = idea.holding_period_hint != "intraday"
         if is_overnight and not spec.allow_overnight:
             return False, "OVERNIGHT_FORBIDDEN"
             
@@ -84,17 +94,23 @@ class MultiAssetRiskEngine:
         if notional_value > equity * 0.5:
             return False, "MARGIN_LIMIT_EXCEEDED"
             
-        # 3. Asset Class Limits
+        # 3. Strategy Family Limits
+        curr_strat_exp = self.strategy_exposure.get(idea.strategy_family, 0.0)
+        strat_limit = self.limit_per_strategy.get(idea.strategy_family, 0.5) * equity
+        if curr_strat_exp + notional_value > strat_limit:
+            return False, f"STRATEGY_LIMIT_REACHED_{idea.strategy_family.value}"
+
+        # 4. Asset Class Limits
         current_class_exp = self.class_exposure.get(spec.asset_class, 0.0)
         class_limit = self.limit_per_class.get(spec.asset_class, 1.0) * equity
         if current_class_exp + notional_value > class_limit:
             return False, f"ASSET_CLASS_LIMIT_REACHED_{spec.asset_class.value}"
             
-        # 4. Shorting Constraints
-        if size < 0 and not spec.allow_short:
+        # 5. Shorting Constraints
+        if idea.direction == "short" and not spec.allow_short:
             return False, "SHORTING_FORBIDDEN"
             
-        # 5. Daily Drawdown Cap
+        # 6. Daily Drawdown Cap
         symbol_pnl = self.daily_pnl.get(symbol, 0.0)
         if symbol_pnl < -(equity * 0.02):
             return False, "DAILY_SYMBOL_STOP_LOSS"
