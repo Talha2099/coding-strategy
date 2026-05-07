@@ -12,6 +12,8 @@ from src.execution.engine.base import ExecutionEngine
 
 from src.ml.pattern_recognition.model import PatternRecognizer
 
+from src.core.analytics.factor_engine import FactorEngine
+
 class EventDrivenBacktester:
     def __init__(self, 
                  micro_engine: MicrostructureEngine,
@@ -26,27 +28,50 @@ class EventDrivenBacktester:
         self.risk_engine = risk_engine
         self.exec_engine = exec_engine
         self.pattern_recognizer = pattern_recognizer or PatternRecognizer()
+        self.factor_engine = FactorEngine()
         
         self.history = []
         self.pnl = 0.0
-        self.price_history = [] # For pattern recognition window
+        self.equity_curve = [10000.0]
+        self.price_history = []
+        self.trades_pending_return = [] # To calculate forward returns for factors
 
     def on_tick(self, tick: Tick):
         self.micro_engine.update_trades(tick)
         self.price_history.append(tick.price)
         if len(self.price_history) > 100: self.price_history.pop(0)
+        
+        # Check pending returns for factor updates
+        self._update_factor_returns(tick.price)
+
+    def _update_factor_returns(self, current_price: float):
+        """
+        Calculates realized forward returns for pending trade candidates 
+        to update factor ICs.
+        """
+        still_pending = []
+        for trade in self.trades_pending_return:
+            # If 50 periods have passed, record return
+            trade["counter"] += 1
+            if trade["counter"] >= 50:
+                fwd_return = (current_price - trade["start_price"]) / trade["start_price"]
+                if trade["side"] == "sell": fwd_return *= -1
+                self.factor_engine.update(trade["features"], fwd_return, trade.get("pnl"))
+            else:
+                still_pending.append(trade)
+        self.trades_pending_return = still_pending
 
     def on_orderbook(self, snapshot: OrderBookSnapshot):
         self.micro_engine.update_orderbook(snapshot)
 
     def process_candidate(self, candidate: TradeCandidate, skip_ofi: bool = False):
         """
-        The full pipeline execution for a single candidate.
+        The full pipeline execution for a single candidate with factor recording.
         """
-        # 1. Compute microstructure features (optional OFI)
+        # 1. Compute microstructure features
         micro_features = self.micro_engine.compute_features(skip_ofi=skip_ofi)
         
-        # 2. Pattern Recognition (CNN/LSTM Logic)
+        # 2. Pattern Recognition
         pattern_data = self.pattern_recognizer.calculate_score(
             candidate, 
             self.price_history, 
@@ -54,7 +79,7 @@ class EventDrivenBacktester:
         )
         pattern_prob = pattern_data["probability"]
         
-        # 3. Build feature vector (Fusion)
+        # 3. Build features
         features = self.fusion_engine.build_feature_vector(
             candidate, 
             micro_features, 
@@ -64,10 +89,8 @@ class EventDrivenBacktester:
             }
         )
         
-        # 4. Model Scoring (Meta-Model Filter)
+        # 4. Meta-Model Scoring
         prob = self.meta_model.predict(features)
-        
-        # Final weighted probability
         final_prob = (prob + pattern_prob) / 2
         
         # 5. Create Scored Trade
@@ -79,17 +102,13 @@ class EventDrivenBacktester:
             features=features
         )
         
-        # 5. Risk Gating
+        # 6. Risk Gating
         if not self.risk_engine.validate(scored_trade):
             return "REJECTED_BY_RISK"
             
-        # 6. Position Sizing
+        # 7. Execution
         size = self.risk_engine.position_size(scored_trade)
-        
-        # 7. Execution Decision
         order_type = self.exec_engine.decide_order_type(scored_trade)
-        
-        # 8. Create Execution Order
         order = ExecutionOrder(
             id=candidate.id + "_order",
             symbol=candidate.symbol,
@@ -100,14 +119,28 @@ class EventDrivenBacktester:
             timestamp=datetime.now()
         )
         
-        # 9. Execute (Simulation)
         fill = self.exec_engine.execute(order)
+        
+        # Track PnL (Simplified: entry to TP/SL)
+        pnl = (candidate.take_profit - candidate.entry_zone) * size if final_prob > 0.6 else -(candidate.entry_zone - candidate.stop_loss) * size
+        self.pnl += pnl
+        self.equity_curve.append(self.equity_curve[-1] + pnl)
+
+        # Record for Factor Analysis
+        self.trades_pending_return.append({
+            "features": features,
+            "start_price": candidate.entry_zone,
+            "side": candidate.direction,
+            "counter": 0,
+            "pnl": pnl
+        })
         
         self.history.append({
             "candidate": candidate,
             "scored_trade": scored_trade,
             "order": order,
-            "fill": fill
+            "fill": fill,
+            "pnl": pnl
         })
         
         return "EXECUTED"

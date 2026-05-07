@@ -8,6 +8,7 @@ import { ZoneGrid } from '@/components/dashboard/zone-grid';
 import { TradeTable } from '@/components/dashboard/trade-table';
 import { WorkflowPipeline } from '@/components/dashboard/workflow-pipeline';
 import { RegimeTracker } from '@/components/dashboard/regime-tracker';
+import { FactorHealth } from '@/components/dashboard/factor-health';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Bell, 
@@ -32,6 +33,8 @@ import { WorkflowSimulator, SimulationStep, WORKFLOW_STAGES } from '@/src/core/u
 export default function DashboardPage() {
   const [isSimulating, setIsSimulating] = React.useState(false);
   const [activeTab, setActiveTab] = React.useState('pipeline');
+  const [riskBias, setRiskBias] = React.useState(50);
+  const [regimeSensitivity, setRegimeSensitivity] = React.useState(0.8);
   const [steps, setSteps] = React.useState<SimulationStep[]>([]);
   const [logs, setLogs] = React.useState<string[]>([
     'System initialized',
@@ -53,20 +56,23 @@ export default function DashboardPage() {
     setSteps([]);
     addLog('Initiating full-stack execution workflow...');
     
-    await simulator.runStepByStep((step) => {
-      setSteps(prev => {
-        const index = prev.findIndex(s => s.id === step.id);
-        if (index !== -1) {
-          const next = [...prev];
-          next[index] = step;
-          return next;
+    await simulator.runStepByStep(
+      { risk: riskBias, regime: regimeSensitivity },
+      (step) => {
+        setSteps(prev => {
+          const index = prev.findIndex(s => s.id === step.id);
+          if (index !== -1) {
+            const next = [...prev];
+            next[index] = step;
+            return next;
+          }
+          return [...prev, step];
+        });
+        if (step.status === 'completed') {
+          addLog(`${step.name} finalized`);
         }
-        return [...prev, step];
-      });
-      if (step.status === 'completed') {
-        addLog(`${step.name} finalized`);
       }
-    });
+    );
 
     setTimeout(() => {
       setIsSimulating(false);
@@ -281,18 +287,63 @@ export default function DashboardPage() {
                 </div>
               </section>
 
-              {/* Liquidity Zones */}
-              <section id="zones-section" className="space-y-4">
-                <div className="flex justify-between items-center group cursor-help">
-                  <h2 className="text-white text-[10px] font-bold uppercase tracking-widest flex items-center gap-2">
-                    <Layers size={14} />
-                    Discovery Engine
-                  </h2>
-                  <span className="text-[#00FF00] text-[9px] font-mono tracking-tighter bg-[#00FF00]/10 px-2 py-0.5 rounded-full border border-[#00FF00]/20 group-hover:bg-[#00FF00] group-hover:text-black transition-colors">
-                    SMC-RULESET-V4
-                  </span>
+              {/* Factor Vitality Engine */}
+              <section id="factors-section" className="space-y-4">
+                <FactorHealth />
+              </section>
+
+              {/* Interactive Engine Controls */}
+              <section id="engine-controls" className="bg-[#151619] rounded-2xl border border-[#2A2B2F] p-6 space-y-6">
+                <div className="flex justify-between items-center">
+                  <h3 className="text-white text-[10px] font-bold uppercase tracking-widest flex items-center gap-2">
+                    <Binary size={14} className="text-[#00FF00]" />
+                    Interactive Engine Parameters
+                  </h3>
                 </div>
-                <ZoneGrid />
+                
+                <div className="space-y-6">
+                  <div className="space-y-3">
+                    <div className="flex justify-between text-[10px] font-mono uppercase">
+                      <span className="text-[#8E9299]">Risk Tolerance</span>
+                      <span className="text-[#00FF00]">{riskBias}%</span>
+                    </div>
+                    <input 
+                      type="range" 
+                      min="1" 
+                      max="100" 
+                      value={riskBias}
+                      onChange={(e) => setRiskBias(parseInt(e.target.value))}
+                      className="w-full h-1 bg-black rounded-lg appearance-none cursor-pointer accent-[#00FF00]"
+                    />
+                    <p className="text-[9px] text-gray-600 italic">Adjusts Kelly fraction capping and MC survival thresholds.</p>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div className="flex justify-between text-[10px] font-mono uppercase">
+                      <span className="text-[#8E9299]">Regime Sensitivity</span>
+                      <span className="text-[#00FF00]">{regimeSensitivity.toFixed(2)}</span>
+                    </div>
+                    <input 
+                      type="range" 
+                      min="0" 
+                      max="1" 
+                      step="0.01"
+                      value={regimeSensitivity}
+                      onChange={(e) => setRegimeSensitivity(parseFloat(e.target.value))}
+                      className="w-full h-1 bg-black rounded-lg appearance-none cursor-pointer accent-[#00FF00]"
+                    />
+                    <p className="text-[9px] text-gray-600 italic">Weighting of HMM states vs Microstructure OFI signals.</p>
+                  </div>
+                </div>
+
+                <div className="pt-4 border-t border-[#2A2B2F] flex gap-3">
+                  <button 
+                    onClick={runSimulation}
+                    className="flex-1 py-2 bg-white text-black text-[10px] font-bold uppercase tracking-tighter rounded-lg hover:bg-[#00FF00] transition-colors"
+                  >
+                    Apply & Re-simulate
+                  </button>
+                </div>
               </section>
 
               {/* Regime Tracking */}

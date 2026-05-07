@@ -14,6 +14,7 @@ const STAGE_ICONS: Record<string, any> = {
   ingest: Database,
   micro: Activity,
   regime: Search,
+  attribution: Fingerprint,
   pattern: Fingerprint,
   score: Cpu,
   risk: ShieldCheck,
