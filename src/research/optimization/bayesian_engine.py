@@ -95,21 +95,33 @@ class TuningObjectiveFactory:
     def get_strategy_space(strategy_name: str) -> Dict[str, Any]:
         spaces = {
             "DonchianBreakout": {
-                "window": {"type": "int", "low": 10, "high": 100}
+                "window": {"type": "int", "low": 10, "high": 100},
+                "vol_threshold": {"type": "float", "low": 1.0, "high": 3.0}
             },
             "BollingerMR": {
                 "window": {"type": "int", "low": 10, "high": 50},
-                "num_std": {"type": "float", "low": 1.5, "high": 3.0}
+                "num_std": {"type": "float", "low": 1.5, "high": 3.0},
+                "atr_mult": {"type": "float", "low": 1.0, "high": 4.0}
             },
             "VWAPPullback": {
-                "pullback_threshold": {"type": "float", "low": 0.001, "high": 0.01}
+                "pullback_threshold": {"type": "float", "low": 0.001, "high": 0.01},
+                "trend_filter_window": {"type": "int", "low": 50, "high": 200}
             }
         }
         return spaces.get(strategy_name, {})
 
     @staticmethod
+    def get_regime_space() -> Dict[str, Any]:
+        return {
+            "volatility_window": {"type": "int", "low": 14, "high": 60},
+            "breakout_threshold": {"type": "float", "low": 1.5, "high": 3.5},
+            "ranging_mult": {"type": "float", "low": 0.5, "high": 1.5}
+        }
+
+    @staticmethod
     def get_risk_space() -> Dict[str, Any]:
         return {
             "risk_per_trade": {"type": "float", "low": 0.001, "high": 0.03},
-            "max_exposure": {"type": "float", "low": 0.1, "high": 1.0}
+            "max_exposure": {"type": "float", "low": 0.1, "high": 1.0},
+            "max_drawdown_limit": {"type": "float", "low": 0.05, "high": 0.20}
         }

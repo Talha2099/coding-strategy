@@ -9,12 +9,16 @@ import {
   ShieldCheck, 
   Zap,
   ChevronRight,
-  Binary
+  Binary,
+  Layers,
+  FlaskConical
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navItems = [
   { id: 'dashboard', label: 'Quant Monitor', icon: LayoutDashboard, active: true },
+  { id: 'backtest', label: 'Backtest Manager', icon: Layers },
+  { id: 'optimization', label: 'Optimization Lab', icon: FlaskConical },
   { id: 'math-engine', label: 'Math Auditor', icon: Binary },
   { id: 'pattern-lab', label: 'Pattern Lab', icon: Cpu },
   { id: 'risk-engine', label: 'Risk Dynamics', icon: ShieldCheck },

@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { CheckCircle2, Circle, Loader2, Activity, ShieldCheck, Zap, Cpu, Search, Database, Fingerprint } from 'lucide-react';
+import { CheckCircle2, Circle, Loader2, Activity, ShieldCheck, Zap, Cpu, Search, Database, Fingerprint, Binary } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { SimulationStep, WORKFLOW_STAGES } from '@/src/core/utils/simulation_logic';
 
@@ -12,11 +12,12 @@ interface Props {
 
 const STAGE_ICONS: Record<string, any> = {
   ingest: Database,
-  micro: Activity,
+  technical: Activity,
   regime: Search,
-  attribution: Fingerprint,
-  pattern: Fingerprint,
-  score: Cpu,
+  router: Fingerprint,
+  backtest: Database,
+  analytics: Cpu,
+  optimization: Binary,
   risk: ShieldCheck,
   exec: Zap,
 };

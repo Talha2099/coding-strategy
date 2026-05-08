@@ -9,6 +9,7 @@ import { TradeTable } from '@/components/dashboard/trade-table';
 import { WorkflowPipeline } from '@/components/dashboard/workflow-pipeline';
 import { RegimeTracker } from '@/components/dashboard/regime-tracker';
 import { FactorHealth } from '@/components/dashboard/factor-health';
+import { OptimizationResults } from '@/components/dashboard/optimization-results';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Bell, 
@@ -349,6 +350,11 @@ export default function DashboardPage() {
               {/* Regime Tracking */}
               <section id="regime-section">
                 <RegimeTracker />
+              </section>
+
+              {/* Optimization Results */}
+              <section id="optimization-section">
+                <OptimizationResults />
               </section>
             </motion.div>
           </div>
