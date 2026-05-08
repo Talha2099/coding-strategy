@@ -18,6 +18,7 @@ export const WORKFLOW_STAGES = [
   { id: 'router', name: 'Strategy Router Setup Matching' },
   { id: 'backtest', name: 'Simulated Execution Environment' },
   { id: 'analytics', name: 'Performance & Attribution Analytics' },
+  { id: 'optimization', name: 'Bayesian Hyperparameter Optimization' },
   { id: 'risk', name: 'Portfolio Risk Management & Sizing' },
   { id: 'exec', name: 'Order Execution Hub' }
 ];
@@ -64,7 +65,12 @@ export class WorkflowSimulator {
     await new Promise(r => setTimeout(r, 400));
     onUpdate({ id: 'analytics', name: 'Performance & Attribution Analytics', status: 'completed', data: { win_rate: '64.2%', profit_factor: 2.14 } });
 
-    // 7. Risk
+    // 7. Optimization
+    onUpdate({ id: 'optimization', name: 'Bayesian Hyperparameter Optimization', status: 'processing' });
+    await new Promise(r => setTimeout(r, 900));
+    onUpdate({ id: 'optimization', name: 'Bayesian Hyperparameter Optimization', status: 'completed', data: { best_window: 24, best_risk: '1.2%', TPE_trials: 50 } });
+
+    // 8. Risk
     onUpdate({ id: 'risk', name: 'Portfolio Risk Management & Sizing', status: 'processing' });
     await new Promise(r => setTimeout(r, 800));
     const size = (0.2 * (params.risk / 50)).toFixed(2);

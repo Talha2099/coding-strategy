@@ -12,7 +12,8 @@ The system is designed as a pipeline with strict data contracts:
 4.  **Meta-Model Filtering** (`src/ml/meta_labeling/`): Scores candidates to estimate the probability of success.
 5.  **Risk Gating** (`src/risk/`): Validates approved trades against portfolio constraints and determines position sizing.
 6.  **Microstructure-Aware Execution** (`src/execution/`): Optimizes order type (market vs limit) and routes to brokers.
-7.  **Event-Driven Backtest** (`src/backtest/`): Simulates the full pipeline under realistic conditions (slippage, spread, fills).
+7.  **Bayesian Hyperparameter Optimization** (`src/research/optimization/`): Uses TPE/Bayesian techniques to find optimal strategy and risk parameters.
+8.  **Event-Driven Backtest** (`src/backtest/`): Simulates the full pipeline under realistic conditions (slippage, spread, fills).
 
 ## Key Data Contracts
 

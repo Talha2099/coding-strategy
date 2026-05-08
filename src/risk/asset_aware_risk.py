@@ -56,8 +56,9 @@ class CrashProtectionModule:
         return {"block": False}
 
 class MultiAssetRiskEngine:
-    def __init__(self, specs: Dict[str, InstrumentSpec]):
+    def __init__(self, specs: Dict[str, InstrumentSpec], risk_per_trade: float = 0.01):
         self.specs = specs
+        self.risk_per_trade = risk_per_trade
         self.exposure: Dict[str, float] = {} # Symbol -> Position Size
         self.class_exposure: Dict[AssetClass, float] = {ac: 0.0 for ac in AssetClass}
         self.strategy_exposure: Dict[StrategyFamily, float] = {sf: 0.0 for sf in StrategyFamily}
@@ -122,8 +123,8 @@ class MultiAssetRiskEngine:
         Kelly-influenced volatility-scaled sizing.
         """
         spec = self.specs[symbol]
-        # Risk 1% of equity per trade
-        risk_amount = equity * 0.01
+        # Risk X% of equity per trade
+        risk_amount = equity * self.risk_per_trade
         
         # Convert stop distance (points) into notional loss
         # Size = Risk / (StopDist * PointValue)
