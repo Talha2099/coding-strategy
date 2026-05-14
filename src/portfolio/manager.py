@@ -36,27 +36,49 @@ class PortfolioManager:
             meta_prob = self.meta_model.predict(features, regime, idea.strategy_family)
             idea.confidence_score = meta_prob
 
-        # 2. Signal Suppression Logic
+        # 2. Signal Suppression & Conflict Resolution
         # - In strong trends, suppress Mean Reversion against the trend
         # - In range, suppress Breakout until volatility compresses
+        # - Resolve conflicts between Breakout and Mean Reversion ideas on the same symbol
         filtered_ideas = []
+        symbol_ideas: Dict[str, List[TradeIdea]] = {}
         for idea in ideas:
-            # Rule: Don't mean revert against strong trends
-            if regime in [RegimeType.TREND_UP, RegimeType.TREND_DOWN, RegimeType.MID_TREND]:
-                is_mr = idea.strategy_family in [StrategyFamily.MEAN_REVERSION, StrategyFamily.RANGE]
-                trend_dir = 1 if regime_state.direction == 1 else -1
-                trade_dir = 1 if idea.direction == "long" else -1
+            if idea.symbol not in symbol_ideas: symbol_ideas[idea.symbol] = []
+            symbol_ideas[idea.symbol].append(idea)
+
+        for symbol, s_ideas in symbol_ideas.items():
+            # If we have both Breakout and MR for the same symbol
+            families = [i.strategy_family for i in s_ideas]
+            if StrategyFamily.BREAKOUT in families and StrategyFamily.MEAN_REVERSION in families:
+                # Rule: Prioritize the one matching the overextension state
+                if getattr(regime_state, "overextension", 0.0) > 2.0:
+                    # Stretched: Prioritize MR
+                    s_ideas = [i for i in s_ideas if i.strategy_family == StrategyFamily.MEAN_REVERSION]
+                else:
+                    # Not stretched: Prioritize Breakout (momentum)
+                    s_ideas = [i for i in s_ideas if i.strategy_family == StrategyFamily.BREAKOUT]
+
+            for idea in s_ideas:
+                # Rule: Don't mean revert against strong trends
+                if regime in [RegimeType.TREND_UP, RegimeType.TREND_DOWN, RegimeType.MID_TREND]:
+                    is_mr = idea.strategy_family in [StrategyFamily.MEAN_REVERSION, StrategyFamily.RANGE]
+                    trend_dir = 1 if getattr(regime_state, "direction", 0) == 1 else (-1 if getattr(regime_state, "direction", 0) == -1 else 0)
+                    trade_dir = 1 if idea.direction == "long" else -1
+                    
+                    if is_mr and trend_dir != 0 and trade_dir != trend_dir:
+                        # Suppressing counter-trend mean reversion in strong trends
+                        continue
                 
-                if is_mr and trend_dir != 0 and trade_dir != trend_dir:
-                    # Suppressing counter-trend mean reversion in strong trends
-                    continue
-            
-            # Rule: Suppress breakouts in range if health is low
-            if regime == RegimeType.RANGE and idea.strategy_family == StrategyFamily.BREAKOUT:
-                if getattr(regime_state, "health_score", 1.0) < 0.6:
+                # Rule: Suppress breakouts in range if health is low (lack of conviction)
+                if regime == RegimeType.RANGE and idea.strategy_family == StrategyFamily.BREAKOUT:
+                    if getattr(regime_state, "health_score", 1.0) < 0.6:
+                        continue
+
+                # Rule: Suppress trades in Unstable Regimes unless they are high confidence
+                if regime == RegimeType.VOLATILE_UNSTABLE and idea.confidence_score < 0.8:
                     continue
 
-            filtered_ideas.append(idea)
+                filtered_ideas.append(idea)
 
         # 3. Ranking by Expectancy
         def get_expectancy(idea: TradeIdea):

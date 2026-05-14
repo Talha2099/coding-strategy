@@ -23,6 +23,8 @@ from src.rl.agents.execution import ExecutionAgent
 from src.core.utils.logger import system_logger
 from src.backtest.engine.micro_validator import MicrostructureValidator
 
+from src.core.analytics.monitor import StrategyMonitor
+
 class EventDrivenBacktester:
     def __init__(self, 
                  contract_manager: ContractManager,
@@ -47,6 +49,7 @@ class EventDrivenBacktester:
         self.execution_agent = execution_agent
         self.meta_model = meta_model
         self.micro_validator = micro_validator or MicrostructureValidator()
+        self.monitor = StrategyMonitor()
         
         self.history = []
         self.equity_curve = [100000.0]
@@ -59,6 +62,7 @@ class EventDrivenBacktester:
         # Attribution Tracking
         self.strategy_pnl: Dict[str, float] = {} 
         self.regime_pnl: Dict[RegimeType, float] = {rt: 0.0 for rt in RegimeType}
+        self.lifecycle_pnl: Dict[str, float] = {}
         self.asset_pnl: Dict[str, float] = {}
         self.session_pnl: Dict[SessionType, float] = {st: 0.0 for st in SessionType}
         
@@ -101,6 +105,7 @@ class EventDrivenBacktester:
         if len(self.candle_history[symbol]) >= 50:
             regime_state = self.regime_engine.classify(self.candle_history[symbol], symbol)
             regime = RegimeType(regime_state.regime_type)
+            self.monitor.add_regime_record(regime.value)
             
             # MTF Regime Analysis
             # For backtest, we might not have actual separate timeframes ready, 
@@ -196,8 +201,19 @@ class EventDrivenBacktester:
         stop_dist = abs(idea.entry_price - idea.stop_loss)
         if stop_dist == 0: return "REJECTED_ZERO_STOP"
         
+        # 2.1 Spread Check from Execution Engine
+        spread = spec.spread_base # Simplified for backtest, could be session-aware
+        valid_exec, exec_msg = self.exec_engine.validate_for_execution(
+             ExecutionOrder("", idea.symbol, "buy", "market", None, 0.0, dt), 
+             spread, 
+             regime
+        )
+        if not valid_exec:
+             system_logger.log_event("EXECUTION_REJECTION", {"reason": exec_msg, "symbol": symbol, "ts": dt.isoformat()})
+             return f"REJECTED_EXEC_{exec_msg}"
+
         size = self.risk_engine.get_position_sizing(
-            symbol, vol, self.equity_curve[-1], stop_dist, regime,
+            symbol, vol, self.equity_curve[-1], stop_dist, regime_state,
             confidence_score=idea.confidence_score,
             rr=idea.risk_reward_ratio
         )
@@ -257,6 +273,7 @@ class EventDrivenBacktester:
             strategy_name=idea.strategy_name,
             regime_at_entry=regime,
             session_at_entry=session,
+            lifecycle_phase_at_entry=getattr(idea, "lifecycle_phase", "unknown"),
             metadata={
                 "trend_stage": regime_state.lifecycle_stage,
                 "health": regime_state.health_score,
@@ -347,6 +364,7 @@ class EventDrivenBacktester:
         strat_name = pos.id
         self.strategy_pnl[strat_name] = self.strategy_pnl.get(strat_name, 0.0) + raw_pnl
         self.regime_pnl[pos.regime_at_entry] += raw_pnl
+        self.lifecycle_pnl[pos.lifecycle_phase_at_entry] = self.lifecycle_pnl.get(pos.lifecycle_phase_at_entry, 0.0) + raw_pnl
         self.asset_pnl[pos.asset_class] = self.asset_pnl.get(pos.asset_class, 0.0) + raw_pnl
         self.session_pnl[pos.session_at_entry] += raw_pnl
         
@@ -368,7 +386,7 @@ class EventDrivenBacktester:
         self.equity_curve.append(self.equity_curve[-1] + raw_pnl - fill.commission)
         self.current_positions[pos.symbol] -= pos.size
         
-        self.history.append({
+        exit_record = {
             "type": "EXIT",
             "reason": reason,
             "symbol": pos.symbol,
@@ -381,7 +399,9 @@ class EventDrivenBacktester:
             "trend_stage": pos.metadata.get("trend_stage"),
             "health": pos.metadata.get("health"),
             "slippage": pos.metadata.get("slippage", 0.0)
-        })
+        }
+        self.history.append(exit_record)
+        self.monitor.add_trade_record(exit_record)
 
     def run(self, ticks: List[Tick]):
         """
@@ -394,7 +414,9 @@ class EventDrivenBacktester:
 
     def get_summary(self) -> Dict:
         report = PerformanceReporter.generate_report(self.history, self.equity_curve)
+        health = self.monitor.get_health_report()
         return {
             "pnl_stats": self.pnl_stats,
-            "report": report
+            "report": report,
+            "health": health
         }

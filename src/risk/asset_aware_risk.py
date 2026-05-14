@@ -64,30 +64,32 @@ class MultiAssetRiskEngine:
         self.strategy_exposure: Dict[StrategyFamily, float] = {sf: 0.0 for sf in StrategyFamily}
         self.daily_pnl: Dict[str, float] = {} 
         self.total_daily_pnl = 0.0
-        self.max_drawdown_limit = 0.15 # 15% Max DD limit
+        self.max_drawdown_limit = 0.12 # 12% Max DD limit (Tightened)
         self.high_water_mark = 0.0
         self.current_equity = 0.0
         
         # Cooldowns and Success tracking
         self.strategy_performance: Dict[str, List[bool]] = {} # strategy_name -> list of recent wins/losses
+        self.consecutive_losses: Dict[str, int] = {} # counter for losses
         self.cooldowns: Dict[str, datetime] = {} # symbol or strategy -> expiry
         
         # Risk Limits
         self.limit_per_class = {
-            AssetClass.CFD: 1.0, 
-            AssetClass.STOCK: 0.5,
-            AssetClass.FOREX: 1.2,
-            AssetClass.CRYPTO: 0.2
+            AssetClass.CFD: 0.8, 
+            AssetClass.STOCK: 0.4,
+            AssetClass.FOREX: 1.0,
+            AssetClass.CRYPTO: 0.15
         }
         self.limit_per_strategy = {
-            StrategyFamily.TREND: 0.5,
-            StrategyFamily.BREAKOUT: 0.3,
-            StrategyFamily.PULLBACK: 0.4,
-            StrategyFamily.MEAN_REVERSION: 0.2,
-            StrategyFamily.RANGE: 0.2,
-            StrategyFamily.GAP: 0.1
+            StrategyFamily.TREND: 0.4,
+            StrategyFamily.BREAKOUT: 0.25,
+            StrategyFamily.PULLBACK: 0.3,
+            StrategyFamily.MEAN_REVERSION: 0.15,
+            StrategyFamily.RANGE: 0.15,
+            StrategyFamily.GAP: 0.05
         }
-        self.max_daily_loss_pct = 0.03 # 3% Max Daily Loss
+        self.max_daily_loss_pct = 0.025 # 2.5% Max Daily Loss
+        self.max_risk_per_trade = 0.02 # Hard cap at 2%
         self.correlation_matrix: Optional[np.ndarray] = None
         self.symbols_in_corr: List[str] = []
 
@@ -99,14 +101,26 @@ class MultiAssetRiskEngine:
     def update_performance(self, strategy_name: str, symbol: str, is_win: bool, now: datetime):
         if strategy_name not in self.strategy_performance:
             self.strategy_performance[strategy_name] = []
+            self.consecutive_losses[strategy_name] = 0
+            
         self.strategy_performance[strategy_name].append(is_win)
-        if len(self.strategy_performance[strategy_name]) > 10:
+        if not is_win:
+            self.consecutive_losses[strategy_name] += 1
+        else:
+            self.consecutive_losses[strategy_name] = 0
+            
+        if len(self.strategy_performance[strategy_name]) > 20:
             self.strategy_performance[strategy_name].pop(0)
             
-        # Cooldown logic: if last 3 trades were losses, 4-hour cooldown
-        recent = self.strategy_performance[strategy_name][-3:]
-        if len(recent) == 3 and not any(recent):
+        # Cooldown logic: if last 3 trades were losses or 3 consecutive losses, 4-hour cooldown
+        if self.consecutive_losses[strategy_name] >= 3:
             self.cooldowns[strategy_name] = now + timedelta(hours=4)
+            from src.core.utils.logger import system_logger
+            system_logger.log_event("STRATEGY_COOLDOWN_TRIGGERED", {
+                "strategy": strategy_name,
+                "losses": self.consecutive_losses[strategy_name],
+                "expiry": (now + timedelta(hours=4)).isoformat()
+            })
 
     def validate_trade(self, 
                        idea: TradeIdea,
@@ -186,14 +200,15 @@ class MultiAssetRiskEngine:
                            rr: float = 2.0) -> float:
         """
         Volatility-scaled sizing, regime-aware, health-aware.
+        Implements late-entry penalty and overextension de-risking.
         """
         from src.core.math_engine.finance_models import KellyCriterion
-        from src.core.types.strategy import RegimeType
+        from src.core.types.strategy import RegimeType, StrategyPhase
         
         spec = self.specs[symbol]
         
         # 1. Base Risk
-        base_risk_pct = self.risk_per_trade
+        base_risk_pct = min(self.risk_per_trade, self.max_risk_per_trade)
         
         # 2. Kelly Guidance 
         kelly_fraction = KellyCriterion.calculate_fraction(confidence_score, rr, fraction_cap=0.1)
@@ -204,34 +219,52 @@ class MultiAssetRiskEngine:
         regime = RegimeType(regime_state.regime_type)
         
         if regime == RegimeType.VOLATILE_UNSTABLE:
-            multiplier = 0.1
+            multiplier = 0.2
         elif regime in [RegimeType.EARLY_TREND, RegimeType.TREND_IGNITION]:
             multiplier = 1.2 # Be aggressive early
         elif regime in [RegimeType.LATE_TREND, RegimeType.TREND_EXHAUSTION]:
             multiplier = 0.5 # Scale down at the end
             
         # 4. Health-based adjustment
-        health_mult = regime_state.health_score # 0 to 1
-        multiplier *= (0.5 + 0.5 * health_mult) # 0.5x block to 1.0x full
+        health_mult = getattr(regime_state, "health_score", 0.5) # 0 to 1
+        multiplier *= (0.3 + 0.7 * health_mult) # 0.3x block to 1.0x full
         
         # 5. Overextension / Exhaustion Penalty
-        if regime_state.overextension > 2.0:
-            multiplier *= 0.7
-        if regime_state.exhaustion_risk > 0.7:
-            multiplier *= 0.5
+        overextension = getattr(regime_state, "overextension", 0.0)
+        if overextension > 2.0:
+            multiplier *= 0.6
+        exhaustion = getattr(regime_state, "exhaustion_risk", 0.0)
+        if exhaustion > 0.7:
+            multiplier *= 0.4
             
+        # 6. Late-entry Penalty
+        # If we are entering at a 'trailing' or 'continuation' phase instead of 'setup'
+        if hasattr(regime_state, "lifecycle_phase") and regime_state.lifecycle_phase in ["continuation", "trailing"]:
+            multiplier *= 0.7 # 30% reduction for entering late
+
         final_risk_pct = guided_risk_pct * multiplier
         risk_amount = equity * final_risk_pct
         
-        # 6. Size Calculation
+        # 7. Size Calculation
         adjusted_stop_dist = stop_dist * spec.stop_widening_factor
         raw_size = risk_amount / (adjusted_stop_dist * spec.point_value + 1e-9)
         
-        # 7. Correlation Scaling (Optional adjustment)
+        # 8. Correlation Scaling
         if self.correlation_matrix is not None and symbol in self.symbols_in_corr:
             idx = self.symbols_in_corr.index(symbol)
             avg_corr = np.mean(self.correlation_matrix[idx])
-            if avg_corr > 0.7:
-                raw_size *= 0.7 # Reduction for highly correlated asset
+            if avg_corr > 0.6:
+                raw_size *= (1.0 - (avg_corr - 0.6) * 2) # Steep decay for correlation
         
-        return max(spec.min_lot, round(raw_size / spec.lot_step) * spec.lot_step)
+        final_size = max(spec.min_lot, round(raw_size / spec.lot_step) * spec.lot_step)
+        
+        from src.core.utils.logger import system_logger
+        system_logger.log_event("RISK_SIZING_CALCULATION", {
+            "symbol": symbol,
+            "multiplier": multiplier,
+            "base_risk": base_risk_pct,
+            "final_size": final_size,
+            "regime": regime.name
+        })
+        
+        return final_size

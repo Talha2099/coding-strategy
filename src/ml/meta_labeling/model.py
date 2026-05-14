@@ -28,6 +28,7 @@ class MetaModel:
         overextension = float(features.get("overextension", 0.0))
         trend_stage = int(features.get("trend_stage", 0))
         asset_class = features.get("asset_class", "cfd")
+        scenario = features.get("scenario", "unknown")
         
         # 1. Update Volatility Forecast
         forecasted_vol = self.vola_forecast.forecast(vol)
@@ -35,7 +36,7 @@ class MetaModel:
         # 2. Monte Carlo edge estimation
         # Drift influenced by health and stage
         drift = (ofi * 0.01) + (trend_strength * health * 0.05)
-        if overextension > 2.0: drift *= 0.5
+        if overextension > 2.2: drift *= 0.4 # Mean reversion edge increases as drift decreases for trend
         if trend_stage >= 6: drift *= 0.3 # Tail end of trend
         
         gbm = GeometricBrownianMotion(mu=drift, sigma=forecasted_vol)
@@ -47,30 +48,31 @@ class MetaModel:
         )
         prob_up = np.mean(paths[:, -1] > 1.0)
         
-        # 3. Strategy-Regime Mismatch Check
-        # Penalize strategies that are conceptually mismatched with the current regime
+        # 3. Strategy-Regime-Scenario Mismatch Check
         congruence_bonus = 0.0
         if strategy_family == StrategyFamily.TREND and regime in [RegimeType.TREND, RegimeType.BREAKOUT]:
-            congruence_bonus = 0.1
+            congruence_bonus = 0.15
         elif strategy_family == StrategyFamily.RANGE and regime == RegimeType.RANGE:
-            congruence_bonus = 0.1
-        elif strategy_family == StrategyFamily.MEAN_REVERSION and regime == RegimeType.MEAN_REVERTING:
-            congruence_bonus = 0.1
-        elif regime == RegimeType.VOLATILE_UNSTABLE:
-            congruence_bonus = -0.3 # Heavy penalty in unstable regimes
+            congruence_bonus = 0.15
+        elif strategy_family == StrategyFamily.MEAN_REVERSION and (regime == RegimeType.MEAN_REVERTING or overextension > 2.5):
+            congruence_bonus = 0.2 # Strongly favor MR in overextended markets
             
-        # 4. Asset-Specific Adjustments
-        asset_penalty = 0.0
-        if asset_class == "stock" and session not in ["ny_open", "ny_close"]:
-            asset_penalty = -0.1 # Stocks perform better near open/close
+        # Scenario Specific calibrations
+        if scenario == "compression_breakout" and strategy_family == StrategyFamily.BREAKOUT:
+             congruence_bonus += 0.1
+        if scenario == "false_breakout" and strategy_family == StrategyFamily.RANGE:
+             congruence_bonus += 0.1
+             
+        if regime == RegimeType.VOLATILE_UNSTABLE:
+            congruence_bonus = -0.4 # Heavy penalty in unstable regimes
             
         # 5. Base Score Assembly
-        score = 0.5 + congruence_bonus + asset_penalty
-        score += ofi * 0.15 # OFI is a strong microstructure confirmation
-        score += trend_strength * 0.1
+        score = 0.5 + congruence_bonus
+        score += ofi * 0.2 # Microstructure is king for short-term filtering
+        score += (health - 0.5) * 0.2
         
         # Hybrid Blending
-        final_prob = 0.5 * score + 0.5 * prob_up
+        final_prob = 0.6 * score + 0.4 * prob_up
             
         return float(max(0.01, min(0.99, final_prob)))
 

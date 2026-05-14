@@ -6,27 +6,33 @@ from src.features.technical_engine import TechnicalFeatureEngine
 from src.core.contracts.spec import InstrumentSpec
 import numpy as np
 
-class VWAPReversion(MeanReversionLifecycleEngine):
+class MAReversion(MeanReversionLifecycleEngine):
     """
-    Mean reversion strategy targeting VWAP when price is overextended.
+    Mean reversion strategy based on price distance from moving averages (EMA 20/50/200).
+    Targets the mean (the specific MA being reverted to).
     """
-    def __init__(self, spec: InstrumentSpec, dev_threshold: float = 2.5):
-        super().__init__("VWAPReversion", spec)
-        self.dev_threshold = dev_threshold
+    def __init__(self, spec: InstrumentSpec, window: int = 50):
+        super().__init__(f"MAReversion_{window}", spec)
+        self.window = window
 
     def detect_setup(self, candles: List[Candle], regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> bool:
         if not super().detect_setup(candles, regime_state, mtf_state):
              return False
              
         features = TechnicalFeatureEngine.get_candle_features(candles)
-        curr_price = candles[-1].close
-        curr_vwap = features["vwap"][-1]
         
-        # Calculate distance in ATR units
+        # We use distance in ATR units
         atr = features["atr"][-1]
-        dist_vwap = (curr_price - curr_vwap) / (atr + 1e-9)
         
-        setup_valid = abs(dist_vwap) > self.dev_threshold
+        if self.window == 20: ma = features["ema_20"][-1]
+        elif self.window == 50: ma = features["ema_50"][-1]
+        else: ma = features["ema_20"][-1] # Fallback
+        
+        dist = (candles[-1].close - ma) / (atr + 1e-9)
+        
+        # Stretch usually significant above 3 ATR
+        setup_valid = abs(dist) > 3.0
+        
         if setup_valid:
             self.current_phase = StrategyPhase.SETUP_DETECTED
             
@@ -34,5 +40,6 @@ class VWAPReversion(MeanReversionLifecycleEngine):
 
     def define_target(self, candles: List[Candle]) -> float:
         features = TechnicalFeatureEngine.get_candle_features(candles)
-        return features["vwap"][-1]
-
+        if self.window == 20: return features["ema_20"][-1]
+        if self.window == 50: return features["ema_50"][-1]
+        return features["ema_200"][-1]

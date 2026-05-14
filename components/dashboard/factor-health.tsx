@@ -14,10 +14,10 @@ interface Factor {
 
 export function FactorHealth() {
   const [strategies, setStrategies] = React.useState([
-    { name: 'Breakout Engine', winRate: 68.2, sharpe: 2.4, status: 'HEALTHY' },
-    { name: 'Mean Reversion', winRate: 54.1, sharpe: 1.8, status: 'STABLE' },
-    { name: 'Pullback Unit', winRate: 72.5, sharpe: 3.1, status: 'HEALTHY' },
-    { name: 'Gap Analytics', winRate: 48.9, sharpe: 0.9, status: 'DEGRADING' },
+    { name: 'Breakout Engine', winRate: 68.2, sharpe: 2.4, status: 'HEALTHY', decay: 0.02 },
+    { name: 'Mean Reversion', winRate: 54.1, sharpe: 1.8, status: 'STABLE', decay: 0.05 },
+    { name: 'Pullback Unit', winRate: 72.5, sharpe: 3.1, status: 'HEALTHY', decay: 0.01 },
+    { name: 'Gap Analytics', winRate: 48.9, sharpe: 0.9, status: 'DEGRADING', decay: 0.14 },
   ]);
 
   return (
@@ -45,10 +45,16 @@ export function FactorHealth() {
                   )}>
                     {strat.status}
                   </span>
-                  {strat.status === 'DEGRADING' && <AlertTriangle size={10} className="text-red-500 animate-pulse" />}
+                  {strat.decay > 0.1 && <AlertTriangle size={10} className="text-red-500 animate-pulse" />}
                 </div>
               </div>
               <div className="text-right">
+                <div className="flex items-center gap-2 justify-end mb-1">
+                   <span className="text-[8px] uppercase text-[#8E9299]">Drift:</span>
+                   <span className={cn("text-[9px] font-mono", strat.decay > 0.1 ? "text-red-500" : "text-gray-400")}>
+                      {(strat.decay * 100).toFixed(1)}%
+                   </span>
+                </div>
                 <span className="text-xs text-white font-mono">WR: {strat.winRate}%</span>
                 <p className={cn(
                   "text-[8px] font-mono",

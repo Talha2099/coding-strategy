@@ -40,7 +40,6 @@ class TechnicalFeatureEngine:
         tr2 = np.abs(highs - np.roll(closes, 1))
         tr3 = np.abs(lows - np.roll(closes, 1))
         tr = np.maximum(tr1, np.maximum(tr2, tr3))
-        # First element is invalid due to roll
         tr[0] = tr[1] if len(tr) > 1 else 0
         return pd.Series(tr).rolling(window=window).mean().values
 
@@ -60,45 +59,32 @@ class TechnicalFeatureEngine:
     def adx(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, window: int = 14) -> np.ndarray:
         plus_dm = pd.Series(highs).diff()
         minus_dm = pd.Series(lows).diff()
-        
         plus_dm[plus_dm < 0] = 0
         minus_dm[minus_dm > 0] = 0
         minus_dm = -minus_dm
-        
-        tr = TechnicalFeatureEngine.atr(highs, lows, closes, 1) # True Range as Series
         atr = TechnicalFeatureEngine.atr(highs, lows, closes, window)
-        
         plus_di = 100 * (pd.Series(plus_dm).rolling(window).mean() / atr)
         minus_di = 100 * (pd.Series(minus_dm).rolling(window).mean() / atr)
-        
         dx = 100 * (np.abs(plus_di - minus_di) / (plus_di + minus_di))
         return pd.Series(dx).rolling(window).mean().values
 
     @staticmethod
     def slope(series: np.ndarray, window: int = 5) -> np.ndarray:
-        """Returns the linear regression slope of the series."""
         y = series
-        x = np.arange(len(y))
-        
         def calc_slope(y_window):
             if np.any(np.isnan(y_window)): return 0.0
             x_window = np.arange(len(y_window))
             slope, _ = np.polyfit(x_window, y_window, 1)
             return slope
-
         return pd.Series(y).rolling(window=window).apply(calc_slope).values
 
     @staticmethod
-    def hurst_exponent(prices: np.ndarray, window: int = 100) -> np.ndarray:
-        """Estimate Hurst exponent to distinguish between trending, random walk, and mean-reverting."""
-        def calc_hurst(y):
-            if len(y) < 20: return 0.5
-            lags = range(2, 20)
-            tau = [np.sqrt(np.std(np.subtract(y[lag:], y[:-lag]))) for lag in lags]
-            poly = np.polyfit(np.log(lags), np.log(tau), 1)
-            return poly[0] * 2.0
-
-        return pd.Series(prices).rolling(window=min(window, len(prices))).apply(calc_hurst).values
+    def hurst_exponent(prices: np.ndarray, window: int = 100) -> float:
+        if len(prices) < window: return 0.5
+        lags = range(2, 20)
+        tau = [np.sqrt(np.std(np.subtract(prices[lag:], prices[:-lag]))) for lag in lags]
+        poly = np.polyfit(np.log(lags), np.log(tau), 1)
+        return poly[0] * 2.0
 
     @staticmethod
     def get_candle_stats(highs, lows, opens, closes) -> Dict[str, np.ndarray]:
@@ -106,7 +92,6 @@ class TechnicalFeatureEngine:
         upper_wick = highs - np.maximum(opens, closes)
         lower_wick = np.minimum(opens, closes) - lows
         total_range = highs - lows
-        
         return {
             "body_pct": body / (total_range + 1e-9),
             "upper_wick_pct": upper_wick / (total_range + 1e-9),
@@ -127,95 +112,91 @@ class TechnicalFeatureEngine:
         return (np.cumsum(prices * volumes) / (np.cumsum(volumes) + 1e-9))
 
     @staticmethod
-    def hurst_exponent(prices: np.ndarray, window: int = 100) -> float:
-        """Simplified Hurst Exponent calculation."""
-        if len(prices) < window: return 0.5
-        lags = range(2, 20)
-        tau = [np.sqrt(np.std(np.subtract(prices[lag:], prices[:-lag]))) for lag in lags]
-        poly = np.polyfit(np.log(lags), np.log(tau), 1)
-        return poly[0] * 2.0
-
-    @staticmethod
-    def get_candle_features(candles: List[Candle], session: Optional[str] = None) -> Dict[str, np.ndarray]:
+    def get_candle_features(candles: List[Candle]) -> Dict[str, np.ndarray]:
         if len(candles) < 2: return {}
         df = pd.DataFrame([c.__dict__ for c in candles])
-        
         closes = df['close'].values
         highs = df['high'].values
         lows = df['low'].values
         opens = df['open'].values
         volumes = df['volume'].values
+        timestamps = df['ts'].values
 
-        # 1. Core Returns & Volume
         rel_vol = volumes / (pd.Series(volumes).rolling(window=20).mean().values + 1e-9)
         log_returns = np.log(closes / (pd.Series(closes).shift(1).values + 1e-9))
         log_returns[0] = 0
-        realized_vol = pd.Series(log_returns).rolling(window=20).std().values * np.sqrt(252 * 1440) 
+        returns = pd.Series(closes).pct_change().fillna(0).values
+        realized_vol = pd.Series(log_returns).rolling(window=14).std().values * np.sqrt(252 * 1440) 
         atr = TechnicalFeatureEngine.atr(highs, lows, closes, 14)
         
-        # 2. Moving Averages & Trend
         sma_20 = TechnicalFeatureEngine.sma(closes, 20)
         sma_50 = TechnicalFeatureEngine.sma(closes, 50)
         ema_20 = TechnicalFeatureEngine.ema(closes, 20)
         ema_50 = TechnicalFeatureEngine.ema(closes, 50)
         ema_200 = TechnicalFeatureEngine.ema(closes, 200)
         
-        # 3. Slopes & Curvature (2nd Derivative)
         sma_20_slope = TechnicalFeatureEngine.slope(sma_20, 5)
-        sma_20_curve = TechnicalFeatureEngine.slope(sma_20_slope, 5) # Acceleration
+        sma_20_curve = TechnicalFeatureEngine.slope(sma_20_slope, 5) 
         
-        # 4. Moving Average Cross States
         ema_cross = np.where(ema_20 > ema_50, 1.0, -1.0)
         ema_cross_golden = np.where((ema_50 > ema_200) & (ema_20 > ema_50), 1.0, 0.0)
         
-        # 5. VWAP Distance
         vwap_val = TechnicalFeatureEngine.vwap(closes, volumes)
         vwap_dist = (closes - vwap_val) / (closes + 1e-9)
 
-        # 6. Oscillators
         rsi = TechnicalFeatureEngine.rsi(closes, 14)
         macd = TechnicalFeatureEngine.macd(closes)
         adx = TechnicalFeatureEngine.adx(highs, lows, closes, 14)
         zscore = TechnicalFeatureEngine.zscore(closes, 20)
         
-        # 7. Bands & Squeeze
         bb_mid = pd.Series(closes).rolling(20).mean()
         bb_std = pd.Series(closes).rolling(20).std()
         bb_upper = bb_mid + 2 * bb_std
         bb_lower = bb_mid - 2 * bb_std
         bb_width = (bb_upper - bb_lower) / (bb_mid + 1e-9)
-        
-        # Squeeze detection: BB width < K-period minimum
         bb_squeeze = np.where(bb_width < pd.Series(bb_width).rolling(100).min().shift(1) * 1.1, 1.0, 0.0)
+        bb_expansion = pd.Series(bb_width).diff().values
         
-        # 8. Donchian & Breakout
         donchian = TechnicalFeatureEngine.donchian_channels(highs, lows, 20)
         breakout_dist_upper = (highs - donchian["upper"]) / (atr + 1e-9)
         breakout_dist_lower = (lows - donchian["lower"]) / (atr + 1e-9)
+        range_width = (donchian["upper"] - donchian["lower"]) / (sma_20 + 1e-9)
 
-        # 9. Swing Structure (HH, HL, LH, LL)
-        # Simplified: check if current high/low is max/min of lookback
         is_hh = np.where(highs == pd.Series(highs).rolling(20).max(), 1.0, 0.0)
         is_ll = np.where(lows == pd.Series(lows).rolling(20).min(), 1.0, 0.0)
         
-        # 10. Persistence & Hurst
-        # Hurst calculated over window
-        hurst = TechnicalFeatureEngine.hurst_exponent(closes, 100) # This is a float in current impl, need it as array or scalar
-        # Persistence: ratio of path length vs displacement
+        h_val = TechnicalFeatureEngine.hurst_exponent(closes, 100)
+        hurst = np.full_like(closes, float(h_val))
         net_dist = np.abs(closes - pd.Series(closes).shift(20).values)
         path_len = pd.Series(np.abs(np.diff(closes, prepend=closes[0]))).rolling(20).sum().values
-        persistence = net_dist / (path_len + 1e-9)
+        efficiency = net_dist / (path_len + 1e-9) 
 
-        # 11. Gaps
         prev_close = pd.Series(closes).shift(1).values
         gap_size = (opens - prev_close) / (prev_close + 1e-9)
         
-        # 12. Exhaustion (Climatic Move)
-        # Price far from EMA + High Volume + High RSI
+        def _get_session_val(ts):
+            h = pd.to_datetime(ts).hour
+            if 0 <= h < 7: return 1 
+            if 7 <= h < 12: return 2
+            if 12 <= h < 16: return 3 
+            if 16 <= h < 21: return 4 
+            return 0 
+        session_labels = np.array([_get_session_val(ts) for ts in timestamps])
+
         dist_ema20 = (closes - ema_20) / (atr + 1e-9)
         exhaustion_score = np.where((np.abs(dist_ema20) > 4.0) & (rel_vol > 2.0) & ((rsi > 80) | (rsi < 20)), 1.0, 0.0)
+        
+        candle_pct = (closes - lows) / (highs - lows + 1e-9)
+        acceptance_high = pd.Series(candle_pct).rolling(10).mean().values
+        
+        max_high = pd.Series(highs).rolling(20).max()
+        min_low = pd.Series(lows).rolling(20).min()
+        pullback_depth_bull = (max_high - closes) / (atr + 1e-9)
+        pullback_depth_bear = (closes - min_low) / (atr + 1e-9)
+        
+        vol_ma = pd.Series(realized_vol).rolling(50).mean()
+        vol_regime = np.where(realized_vol > vol_ma * 1.5, 2.0, np.where(realized_vol < vol_ma * 0.7, 0.0, 1.0)) 
 
-        # 13. Candle Stats
         c_stats = TechnicalFeatureEngine.get_candle_stats(highs, lows, opens, closes)
         
         return {
@@ -226,7 +207,9 @@ class TechnicalFeatureEngine:
             "volume": volumes,
             "rel_vol": rel_vol,
             "log_returns": log_returns,
+            "returns": returns,
             "realized_vol": realized_vol,
+            "vol_regime": vol_regime,
             "atr": atr,
             "sma_20": sma_20,
             "sma_50": sma_50,
@@ -244,14 +227,24 @@ class TechnicalFeatureEngine:
             "macd_hist": macd["histogram"],
             "adx": adx,
             "bb_width": bb_width.values,
+            "bb_upper": bb_upper.values,
+            "bb_lower": bb_lower.values,
             "bb_squeeze": bb_squeeze,
+            "bb_expansion": bb_expansion,
             "breakout_dist_upper": breakout_dist_upper,
             "breakout_dist_lower": breakout_dist_lower,
+            "range_width": range_width,
             "is_hh": is_hh,
             "is_ll": is_ll,
-            "persistence": persistence,
+            "efficiency": efficiency,
+            "hurst": hurst,
             "gap_size": gap_size,
+            "session_labels": session_labels,
             "exhaustion_score": exhaustion_score,
+            "dist_ema20": dist_ema20,
+            "acceptance_high": acceptance_high,
+            "pullback_depth_bull": pullback_depth_bull.values,
+            "pullback_depth_bear": pullback_depth_bear.values,
             "body_pct": c_stats["body_pct"],
             "upper_wick_pct": c_stats["upper_wick_pct"],
             "lower_wick_pct": c_stats["lower_wick_pct"],

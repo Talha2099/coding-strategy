@@ -1,91 +1,41 @@
 from typing import List, Optional, Dict
-from src.strategies.base import BaseStrategy
-from src.core.types.strategy import TradeIdea, RegimeType, StrategyFamily
+from src.strategies.range.engine import RangeTradingLifecycleEngine
+from src.core.types.strategy import TradeIdea, RegimeType, StrategyFamily, StrategyPhase
 from src.core.types.trading import Candle, RegimeState, MTFRegimeState
 from src.features.technical_engine import TechnicalFeatureEngine
 from src.core.contracts.spec import InstrumentSpec
+import numpy as np
 
-class RangeFade(BaseStrategy):
+class RangeFade(RangeTradingLifecycleEngine):
     """
-    Fades range boundaries when ADX is low and Bollinger Bands are stable.
-    Uses Hurst exponent filter to ensure non-trending environment.
+    Standard range fade strategy.
+    Uses Hurst exponent filter: Hurst < 0.4 indicates mean-reverting/ranging bias.
     """
     def __init__(self, spec: InstrumentSpec):
-        super().__init__("RangeFade", StrategyFamily.RANGE, spec)
-
-    def is_valid_regime(self, regime: RegimeType) -> bool:
-        return regime in [RegimeType.RANGE, RegimeType.MEAN_REVERTING, RegimeType.VOLATILE_UNSTABLE]
+        super().__init__("RangeFade", spec, "classic")
 
     def detect_setup(self, candles: List[Candle], regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> bool:
-        if len(candles) < 50: return False
-            
-        # HTF Trend check
-        if mtf_state and mtf_state.confluence_score > 0.8:
-            return False
-
+        if not super().detect_setup(candles, regime_state, mtf_state):
+             return False
+             
         features = TechnicalFeatureEngine.get_candle_features(candles)
-        closes = features["close"]
-        bb_upper = features["bb_upper"]
-        bb_lower = features["bb_lower"]
         
-        curr_price = closes[-1]
+        # 1. Hurst Exponent Filter
+        # Hurst < 0.45 usually indicates anti-persistent (mean-reverting) behavior
+        hurst = features["hurst"][-1] if "hurst" in features else 0.5
+        is_anti_persistent = hurst < 0.45
         
-        # Price is at the very edge of the Bollinger Band
-        self.is_short = curr_price >= bb_upper[-1] * 0.999
-        self.is_long = curr_price <= bb_lower[-1] * 1.001
+        # 2. Oscillating context (RSI centered or extreme)
+        rsi = features["rsi"][-1]
+        is_oscillating = 30 < rsi < 70
         
-        return self.is_long or self.is_short
+        valid = is_anti_persistent and is_oscillating
+        if valid:
+            self.current_phase = StrategyPhase.SETUP_DETECTED
+            
+        return valid
 
     def confirm_entry(self, candles: List[Candle]) -> bool:
-        # Confirmation by rejection
-        last = candles[-1]
-        if self.is_long:
-            return last.close > last.open # Bullish rejection
-        else:
-            return last.close < last.open # Bearish rejection
+        # Standard rejection confirmation from engine
+        return super().confirm_entry(candles)
 
-    def define_stop(self, candles: List[Candle]) -> float:
-        features = TechnicalFeatureEngine.get_candle_features(candles)
-        atr = features["atr"][-1]
-        entry = candles[-1].close
-        # Tight stop for range fades
-        return entry - (1.2 * atr) if self.is_long else entry + (1.2 * atr)
-
-    def define_target(self, candles: List[Candle]) -> float:
-        features = TechnicalFeatureEngine.get_candle_features(candles)
-        # Target is the range midpoint (Mean)
-        return features["sma_20"][-1]
-
-    def score_setup(self, candles: List[Candle], regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> float:
-        features = TechnicalFeatureEngine.get_candle_features(candles)
-        adx = features["adx"][-1]
-        # Lower ADX = better for Range Fade
-        score = max(0.0, 1.0 - (adx / 30.0))
-        
-        if mtf_state and mtf_state.bias == "neutral":
-            score = min(1.0, score + 0.1)
-        return score
-
-    def build_trade_idea(self, symbol: str, candles: List[Candle], regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> Optional[TradeIdea]:
-        entry_price = candles[-1].close
-        stop_loss = self.define_stop(candles)
-        take_profit = self.define_target(candles)
-        
-        rr = abs(take_profit - entry_price) / (abs(entry_price - stop_loss) + 1e-9)
-        if rr < 1.0: return None
-
-        return TradeIdea(
-            symbol=symbol,
-            asset_class=self.spec.asset_class,
-            strategy_name=self.name,
-            strategy_family=self.family,
-            direction="long" if self.is_long else "short",
-            entry_price=entry_price,
-            stop_loss=stop_loss,
-            take_profit=take_profit,
-            risk_reward_ratio=rr,
-            confidence_score=self.score_setup(candles, regime_state, mtf_state),
-            regime_tag=RegimeType(regime_state.regime_type),
-            holding_period_hint="scalp",
-            timestamp=candles[-1].ts
-        )

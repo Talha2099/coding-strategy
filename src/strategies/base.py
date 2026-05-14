@@ -40,6 +40,14 @@ class BaseStrategy(ABC):
         """Scores the quality of the setup (0.0 to 1.0)."""
         pass
 
+    def invalidate_setup(self, candles: List[Candle], regime_state: RegimeState) -> bool:
+        """Returns True if the setup is no longer valid before entry."""
+        return False
+
+    def manage_trade(self, candles: List[Candle], idea: TradeIdea, regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> Optional[Dict]:
+        """Alias for on_trade_update to match specified interface."""
+        return self.on_trade_update(candles, idea, regime_state, mtf_state)
+
     def on_trade_update(self, candles: List[Candle], idea: TradeIdea, regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> Optional[Dict]:
         """
         Optional hook to monitor active trades.

@@ -54,12 +54,26 @@ class ExecutionEngine:
             elif regime == RegimeType.TREND_IGNITION:
                 regime_scaler = 1.6
         
-        # Limit orders usually have 0 slippage if executed exactly at price (or better)
         # Market orders and Stops (which become market) have slippage
+        # Fade entries (Limit) might have negative slippage (price improvement)
         if order.type == "limit":
-             return 0.0
+             return -expected_spread * 0.1 # Small improvement simulation
              
         return expected_spread * 0.5 * vol_scaler * regime_scaler
+
+    def validate_for_execution(self, order: ExecutionOrder, spread: float, regime: Optional[RegimeType] = None) -> Tuple[bool, str]:
+        spec = self.specs.get(order.symbol)
+        if not spec: return False, "UNKNOWN_INSTRUMENT"
+        
+        # 1. Spread Rejection
+        max_allowed_spread = spec.spread_base * 3.0
+        if regime == RegimeType.VOLATILE_UNSTABLE:
+             max_allowed_spread *= 2.0
+             
+        if spread > max_allowed_spread:
+             return False, f"SPREAD_THRESHOLD_EXCEEDED_{spread:.5f} > {max_allowed_spread:.5f}"
+             
+        return True, "READY"
 
     def execute_at_tick(self, order: ExecutionOrder, tick_price: float, session: SessionType, vol: float = 0.0001, regime: Optional[RegimeType] = None) -> Optional[FillResult]:
         """

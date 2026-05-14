@@ -32,13 +32,11 @@ class RegimeEngine:
         curr_rsi = features["rsi"][-1]
         curr_adx = features["adx"][-1]
         curr_vol = features["realized_vol"][-1]
-        curr_persistence = features["persistence"][-1] 
         bb_width = features["bb_width"][-1]
         bb_squeeze = features["bb_squeeze"][-1]
         sma_20_slope = features["sma_20_slope"][-1]
         sma_20_curve = features["sma_20_curve"][-1]
         exhaustion_score = features["exhaustion_score"][-1]
-        vwap_dist = features["vwap_dist"][-1]
         
         # 1. Base Logic Flags
         is_high_vol = curr_atr > hist_atr_mean * 2.0
@@ -46,6 +44,10 @@ class RegimeEngine:
         is_strong_trend_adx = curr_adx > 45
         is_bull_stack = features["ema_20"][-1] > features["ema_50"][-1] > features["ema_200"][-1]
         is_bear_stack = features["ema_20"][-1] < features["ema_50"][-1] < features["ema_200"][-1]
+        
+        rel_vol = features["rel_vol"][-1]
+        breakout_dist_upper = features["breakout_dist_upper"][-1]
+        breakout_dist_lower = features["breakout_dist_lower"][-1]
         
         # 2. Detect Regimes & Lifecycle Stages
         probabilities = {r.value: 0.0 for r in RegimeType}
@@ -55,74 +57,71 @@ class RegimeEngine:
         # Determine core direction
         is_up = sma_20_slope > 0
         
-        # VOLATILE UNSTABLE
+        # TRANSITION LOGIC & REGIME DETECTION
+        
+        # A. VOLATILE UNSTABLE / EXTREME GAP
         if is_high_vol and curr_adx < 20:
              regime = RegimeType.VOLATILE_UNSTABLE
              stage = 0
              probabilities[regime.value] = 0.9
-
-        # GAP DRIVEN
         elif abs(features["gap_size"][-1]) > 0.01:
              regime = RegimeType.GAP_DRIVEN
              stage = 0
              probabilities[regime.value] = 0.8
 
-        # TREND LOGIC
+        # B. BREAKOUT LIFECYCLE (Priority Detection)
+        elif (breakout_dist_upper > 0 or breakout_dist_lower < 0) and rel_vol > 1.2:
+            # Active breakout or immediate post-breakout
+            if rel_vol > 2.0 or abs(features["returns"][-1]) > curr_atr / curr_price:
+                regime = RegimeType.BREAKOUT_ACTIVE
+                stage = 1
+            else:
+                regime = RegimeType.POST_BREAKOUT_CONTINUATION
+                stage = 2
+            probabilities[regime.value] = 0.8
+            
+            # Detect False Breakout Risk (Lagging price, fading volume)
+            if rel_vol < 1.0 and abs(features["returns"][-1]) < 1e-4:
+                regime = RegimeType.FALSE_BREAKOUT_RISK
+                probabilities[regime.value] = 0.6
+
+        # C. TREND LIFECYCLE
         elif is_bull_stack or is_bear_stack or is_trending_adx:
-            # We are in some trend state
             regime = RegimeType.TREND_UP if is_up else RegimeType.TREND_DOWN
             
-            # Sub-regime refined by lifecycle
-            if exhaustion_score > 0.5:
-                regime = RegimeType.LATE_TREND
-                stage = 6
-                probabilities[regime.value] = 0.8
-            elif is_strong_trend_adx and sma_20_curve < 0:
-                # Decelerating
-                regime = RegimeType.LATE_TREND
+            if exhaustion_score > 0.5 or (is_strong_trend_adx and sma_20_curve < 0):
+                regime = RegimeType.TREND_EXHAUSTION
                 stage = 5
-                probabilities[regime.value] = 0.6
             elif (is_bull_stack and is_up) or (is_bear_stack and not is_up):
-                # Is it a pullback?
                 dist_ema20 = (curr_price - features["ema_20"][-1]) / (curr_atr + 1e-9)
                 if (is_up and -1.0 < dist_ema20 < 0.2) or (not is_up and -0.2 < dist_ema20 < 1.0):
                     regime = RegimeType.PULLBACK_IN_TREND
                     stage = 4
-                    probabilities[regime.value] = 0.8
                 else:
                     regime = RegimeType.MID_TREND
                     stage = 3 # Healthy continuation
-                    probabilities[regime.value] = 0.9
-            elif is_trending_adx and (abs(features["breakout_dist_upper"][-1]) < 0.5 or abs(features["breakout_dist_lower"][-1]) < 0.5):
+            elif is_trending_adx:
                 regime = RegimeType.EARLY_TREND
-                stage = 1 # Ignition
-                probabilities[regime.value] = 0.7
-            else:
-                 # Check for reversal RISK
-                 if sma_20_slope * (1 if features["sma_20"][-1] > features["ema_50"][-1] else -1) < 0:
-                      regime = RegimeType.REVERSAL_RISK
-                      stage = 7
-                      probabilities[regime.value] = 0.6
-                 else:
-                      regime = RegimeType.EARLY_TREND
-                      stage = 2 # Confirmed start
-                      probabilities[regime.value] = 0.5 if is_trending_adx else 0.3
+                stage = 2 # Confirmed start
 
-        # BREAKOUT & PREP
+            # Final check for Reversal Risk in Trend
+            if sma_20_curve < -2.0 and curr_adx > 30: # Sharp deceleration
+                regime = RegimeType.REVERSAL_RISK
+                probabilities[regime.value] = 0.7
+
+        # D. PRE-BREAKOUT / COMPRESSION
         elif bb_squeeze > 0.5 or bb_width < np.percentile(features["bb_width"][-100:], 25):
             regime = RegimeType.BREAKOUT_PREP
             stage = 0
             probabilities[regime.value] = 0.8
         
-        # MEAN REVERTING / RANGE
-        if regime == RegimeType.RANGE:
-            if curr_rsi > 70 or curr_rsi < 30:
+        # E. MEAN REVERTING / RANGE
+        else:
+            if curr_rsi > 70 or curr_rsi < 30 or abs(features["zscore"][-1]) > 2.0:
                 regime = RegimeType.MEAN_REVERTING
-                stage = 0
                 probabilities[regime.value] = 0.7
             else:
                 regime = RegimeType.RANGE
-                stage = 0
                 probabilities[regime.value] = 0.6
 
         self.last_regime = regime

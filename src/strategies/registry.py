@@ -20,34 +20,59 @@ class StrategyRouter:
         if not candles:
             return []
             
-        ideas = []
+        ideas: List[TradeIdea] = []
         spec = self.contract_manager.get_spec(symbol)
-        session = self.contract_manager.get_session(candles[-1].ts)
+        last_candle = candles[-1]
+        session = self.contract_manager.get_session(last_candle.ts)
         regime = RegimeType(regime_state.regime_type)
+        volatility = regime_state.volatility
         
-        # 1. Collect potential ideas from valid strategies
+        # 1. Activation & Suppression Logic
+        # Suppress all except Mean Reversion in high toxic volatility if needed
+        suppress_breakout = volatility > 0.05 and regime == RegimeType.VOLATILE_UNSTABLE
+        
         for name, strategy in self.strategies.items():
-            # Check regime validity
+            # Regime Filtering
             if not strategy.is_valid_regime(regime):
                 continue
                 
-            # Detect setup
+            # Family Suppression
+            if strategy.family == StrategyFamily.BREAKOUT and suppress_breakout:
+                continue
+                
+            # Technical Setup Detection
             if strategy.detect_setup(candles, regime_state, mtf_state):
-                # Confirm entry
+                # Check for early invalidation
+                if strategy.invalidate_setup(candles, regime_state):
+                    continue
+
+                # Trigger Confirmation
                 if strategy.confirm_entry(candles):
                     idea = strategy.build_trade_idea(symbol, candles, regime_state, mtf_state)
                     if idea:
                         ideas.append(idea)
         
-        # 2. Sort/Rank by expectancy (Confidence * RR)
+        # 2. Ranking by Adjusted Confidence (Expectancy-based)
+        # We rank by Confidence * (TargetDist/StopDist)
         ideas.sort(key=lambda x: x.confidence_score * x.risk_reward_ratio, reverse=True)
         
-        # 3. Suppress conflicting signals for the same symbol
+        # 3. Conflict Resolution (Standard Signal Synthesis)
+        # Avoid opposing signals on the same asset
         final_ideas = []
-        seen_symbols = set()
-        for idea in ideas:
-            if idea.symbol not in seen_symbols:
-                final_ideas.append(idea)
-                seen_symbols.add(idea.symbol)
+        symbol_map: Dict[str, TradeIdea] = {}
         
-        return final_ideas
+        for idea in ideas:
+            if idea.symbol not in symbol_map:
+                symbol_map[idea.symbol] = idea
+            else:
+                existing = symbol_map[idea.symbol]
+                # If opposite directions, pick the one with significantly higher confidence
+                if idea.direction != existing.direction:
+                    if idea.confidence_score > existing.confidence_score + 0.15:
+                        symbol_map[idea.symbol] = idea
+                else:
+                    # Same direction, keep the one with better RR or higher confidence
+                    if idea.confidence_score * idea.risk_reward_ratio > existing.confidence_score * existing.risk_reward_ratio:
+                        symbol_map[idea.symbol] = idea
+                        
+        return list(symbol_map.values())

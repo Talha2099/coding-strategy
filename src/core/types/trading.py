@@ -10,6 +10,8 @@ class Candle:
     low: float
     close: float
     volume: float
+    symbol: str = "UNKNOWN"
+    timeframe: str = "1m"
 
 @dataclass(frozen=True)
 class Tick:
@@ -52,16 +54,22 @@ class TradeCandidate:
 @dataclass(frozen=True)
 class StrategySignal:
     symbol: str
+    asset_class: str
+    timeframe: str
     direction: Literal["long", "short"]
     entry_price: float
     stop_loss: float
     take_profit: float
+    invalidation_price: float
     confidence: float # 0.0 - 1.0
-    features: Dict[str, float]
     strategy_name: str
     strategy_family: str
+    strategy_subtype: str
     regime_type: str
+    lifecycle_phase: str
+    features: Dict[str, float]
     timestamp: datetime
+    tags: List[str] = field(default_factory=list)
     
     def validate(self):
         if not (0.0 <= self.confidence <= 1.0):
@@ -76,10 +84,14 @@ class StrategySignal:
 @dataclass(frozen=True)
 class RiskDecision:
     signal_id: str
+    symbol: str
+    asset_class: str
     approved: bool
     size: float
     reason: str
     max_drawdown_impact: float
+    strategy_family: str
+    regime_type: str
     timestamp: datetime
     
     def validate(self):
@@ -127,21 +139,34 @@ class MTFRegimeState:
 class ExecutionReport:
     action_id: str
     order_id: str
+    symbol: str
+    asset_class: str
     status: Literal["filled", "rejected", "canceled", "partial"]
     fill_price: Optional[float]
     fill_size: float
     slippage: float
     commission: float
     venue: str
+    strategy_family: str
     timestamp: datetime
 
 @dataclass(frozen=True)
 class TradeLogEvent:
     event_id: str
     trade_id: str
+    symbol: str
+    asset_class: str
     event_type: str # "entry", "stop_moved", "partial_exit", "close", "regime_shift"
-    message: str
-    data: Dict[str, Any]
+    regime_state: Optional[Dict[str, Any]] = None
+    trend_stage: Optional[int] = None
+    health_score: Optional[float] = None
+    feature_snapshot: Optional[Dict[str, Any]] = None
+    setup_reason: Optional[str] = None
+    entry_exit_reason: Optional[str] = None
+    risk_decision: Optional[Dict[str, Any]] = None
+    execution_result: Optional[Dict[str, Any]] = None
+    outcome: Optional[str] = None
+    message: str = ""
     timestamp: datetime = field(default_factory=datetime.utcnow)
 
 @dataclass(frozen=True)
@@ -186,4 +211,5 @@ class Position:
     strategy_name: str
     regime_at_entry: Any = None
     session_at_entry: Any = None
+    lifecycle_phase_at_entry: str = "unknown"
     metadata: Dict[str, Any] = field(default_factory=dict)
