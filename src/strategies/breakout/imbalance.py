@@ -34,7 +34,7 @@ class ImbalanceBreakout(BaseStrategy):
         
         return self.is_long or self.is_short
 
-    def confirm_entry(self, candles: List[Candle]) -> bool:
+    def confirm_entry(self, candles: List[Candle], regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> bool:
         # Require relative volume > 1.2
         features = TechnicalFeatureEngine.get_candle_features(candles)
         return features["rel_vol"][-1] > 1.2

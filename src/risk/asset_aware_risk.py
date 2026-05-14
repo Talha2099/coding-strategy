@@ -187,6 +187,15 @@ class MultiAssetRiskEngine:
             # Late trend protection embedded in validation
             if regime_state.exhaustion_risk > 0.9:
                 return False, "EXHAUSTION_RISK_TOO_HIGH"
+
+            # Range Integrity Protection
+            if idea.strategy_family == StrategyFamily.RANGE and regime_state.regime_type in [
+                RegimeType.RANGE_EXHAUSTION.value, 
+                RegimeType.RANGE_BROKEN_UPSIDE.value, 
+                RegimeType.RANGE_BROKEN_DOWNSIDE.value,
+                RegimeType.RANGE_TO_TREND.value
+            ]:
+                return False, f"RANGE_INTEGRITY_COMPROMISED_{regime_state.regime_type}"
             
         return True, "SUCCESS"
 
@@ -218,29 +227,56 @@ class MultiAssetRiskEngine:
         multiplier = 1.0
         regime = RegimeType(regime_state.regime_type)
         
-        if regime == RegimeType.VOLATILE_UNSTABLE:
-            multiplier = 0.2
-        elif regime in [RegimeType.EARLY_TREND, RegimeType.TREND_IGNITION]:
+        # Trend Lifecycle Awareness
+        if regime in [RegimeType.EARLY_TREND, RegimeType.TREND_IGNITION, RegimeType.BREAKOUT_ACTIVE]:
             multiplier = 1.2 # Be aggressive early
-        elif regime in [RegimeType.LATE_TREND, RegimeType.TREND_EXHAUSTION]:
+        elif regime in [RegimeType.CONFIRMED_TREND, RegimeType.MID_TREND]:
+            multiplier = 1.0 # Standard size
+        elif regime in [RegimeType.LATE_TREND, RegimeType.TREND_EXHAUSTION, RegimeType.EXHAUSTION_RISK]:
             multiplier = 0.5 # Scale down at the end
+        elif regime in [RegimeType.REVERSAL_RISK, RegimeType.TREND_FAILED, RegimeType.VOLATILE_UNSTABLE]:
+            multiplier = 0.2 # Extreme caution
+        elif regime == RegimeType.PRE_TREND_COMPRESSION:
+            multiplier = 0.8 # Anticipatory entry de-risking
             
-        # 4. Health-based adjustment
-        health_mult = getattr(regime_state, "health_score", 0.5) # 0 to 1
-        multiplier *= (0.3 + 0.7 * health_mult) # 0.3x block to 1.0x full
+        # Range Lifecycle Awareness
+        elif regime in [RegimeType.RANGE_ESTABLISHED, RegimeType.RANGE_HIGH_TOUCH, RegimeType.RANGE_LOW_TOUCH]:
+            multiplier = 1.1 # High confidence in range
+        elif regime in [RegimeType.RANGE_FORMING, RegimeType.MEAN_REVERSION_SETUP]:
+            multiplier = 0.8 # Scaling in/Early confidence
+        elif regime in [RegimeType.RANGE_EXHAUSTION, RegimeType.RANGE_EXPANSION_ATTEMPT]:
+            multiplier = 0.5 # De-risk at potential end of range
+        elif regime in [RegimeType.RANGE_BROKEN_UPSIDE, RegimeType.RANGE_BROKEN_DOWNSIDE, RegimeType.RANGE_TO_TREND]:
+            multiplier = 0.1 # Should be blocked but just in case
+            
+        # 4. Health and Persistence Scaling
+        health_mult = getattr(regime_state, "health_score", 0.5) 
+        persistence = getattr(regime_state, "persistence", 0.5)
         
-        # 5. Overextension / Exhaustion Penalty
+        # Composite multiplier: (0.3 floor + up to 0.7 from health/persistence)
+        quality_mult = (0.3 + 0.35 * health_mult + 0.35 * persistence)
+        multiplier *= quality_mult
+        
+        # 5. Overextension Penalty
         overextension = getattr(regime_state, "overextension", 0.0)
-        if overextension > 2.0:
-            multiplier *= 0.6
-        exhaustion = getattr(regime_state, "exhaustion_risk", 0.0)
-        if exhaustion > 0.7:
-            multiplier *= 0.4
+        if overextension > 2.5:
+            multiplier *= 0.5 # Severe overextension
+        elif overextension > 1.5:
+            multiplier *= 0.8 # Mild overextension
             
-        # 6. Late-entry Penalty
-        # If we are entering at a 'trailing' or 'continuation' phase instead of 'setup'
-        if hasattr(regime_state, "lifecycle_phase") and regime_state.lifecycle_phase in ["continuation", "trailing"]:
-            multiplier *= 0.7 # 30% reduction for entering late
+        exhaustion = getattr(regime_state, "exhaustion_risk", 0.0)
+        if exhaustion > 0.8:
+            multiplier *= 0.3
+        elif exhaustion > 0.6:
+            multiplier *= 0.6
+            
+        # 6. Lifecycle Phase Penalty (Legacy compatibility + refinement)
+        if hasattr(regime_state, "lifecycle_stage"):
+            stage = regime_state.lifecycle_stage
+            if stage >= 5: # Late stages
+                multiplier *= 0.6
+            elif stage == 0: # Compression/Ignition
+                multiplier *= 1.1
 
         final_risk_pct = guided_risk_pct * multiplier
         risk_amount = equity * final_risk_pct

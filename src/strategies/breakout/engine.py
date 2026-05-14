@@ -60,7 +60,7 @@ class BreakoutLifecycleEngine(BaseStrategy):
             
         return setup_valid
 
-    def confirm_entry(self, candles: List[Candle]) -> bool:
+    def confirm_entry(self, candles: List[Candle], regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> bool:
         """
         Phase B: Entry Trigger / Ignition.
         """

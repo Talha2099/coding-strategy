@@ -27,26 +27,32 @@ class MTFRegimeEngine:
         ltf_state = self.engine.classify(ltf_candles, symbol)
         
         # 1. Calculate Multi-Timeframe Bias
-        # HTF: 50% weight, MTF: 30% weight, LTF: 20% weight
-        weighted_score = (htf_state.direction * 0.5) + (mtf_state.direction * 0.3) + (ltf_state.direction * 0.2)
+        # HTF is the anchor: 60%, MTF: 25%, LTF: 15%
+        weighted_score = (htf_state.direction * 0.6) + (mtf_state.direction * 0.25) + (ltf_state.direction * 0.15)
         
         bias = "neutral"
-        if weighted_score > 0.3: bias = "bullish"
-        elif weighted_score < -0.3: bias = "bearish"
+        if weighted_score > 0.4: bias = "bullish"
+        elif weighted_score < -0.4: bias = "bearish"
         
         # 2. Confluence Score
-        # Max possible alignment is 1.0
         confluence = abs(weighted_score)
         
-        # 3. Detect Structural Conflicts
-        # Pullback detection: HTF is trending, but LTF/MTF are counter-trending
-        is_htf_trending = htf_state.trend_strength > 25
+        # 3. Detect Structural Context & Conflicts
+        # Pullback: HTF is strong trend, but MTF/LTF are correcting
         is_pullback = False
-        if is_htf_trending:
-            if htf_state.direction == 1 and ltf_state.direction == -1:
+        is_noise = False
+        htf_trending = htf_state.trend_strength > 30 and htf_state.health_score > 0.5
+        
+        if htf_trending:
+            # Pullback if MTF direction != HTF direction
+            if htf_state.direction != mtf_state.direction and mtf_state.direction != 0:
                 is_pullback = True
-            elif htf_state.direction == -1 and ltf_state.direction == 1:
-                is_pullback = True
+            # Noise if LTF is oscillating but MTF/HTF are stable
+            elif ltf_state.trend_strength < 20 and mtf_state.direction == htf_state.direction:
+                is_noise = True
+
+        # HTF Weakening check
+        htf_weakening = htf_state.acceleration < 0 and htf_state.exhaustion_risk > 0.6
         
         return MTFRegimeState(
             symbol=symbol,
@@ -55,7 +61,13 @@ class MTFRegimeEngine:
             ltf_state=ltf_state,
             bias=bias,
             confluence_score=confluence,
-            timestamp=ltf_candles[-1].ts if ltf_candles else datetime.utcnow()
+            timestamp=ltf_candles[-1].ts if ltf_candles else datetime.utcnow(),
+            metadata={
+                "is_pullback": is_pullback,
+                "is_noise": is_noise,
+                "htf_weakening": htf_weakening,
+                "weighted_score": weighted_score
+            }
         )
 
     def is_aligned(self, mtf_state: MTFRegimeState, direction: str) -> bool:

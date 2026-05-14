@@ -59,16 +59,25 @@ class PortfolioManager:
                     s_ideas = [i for i in s_ideas if i.strategy_family == StrategyFamily.BREAKOUT]
 
             for idea in s_ideas:
-                # Rule: Don't mean revert against strong trends
-                if regime in [RegimeType.TREND_UP, RegimeType.TREND_DOWN, RegimeType.MID_TREND]:
-                    is_mr = idea.strategy_family in [StrategyFamily.MEAN_REVERSION, StrategyFamily.RANGE]
+                # Rule: Don't mean revert or range fade against healthy trends
+                trend_regimes = [
+                    RegimeType.TREND_UP, RegimeType.TREND_DOWN, 
+                    RegimeType.EARLY_TREND, RegimeType.CONFIRMED_TREND, RegimeType.MID_TREND
+                ]
+                if regime in trend_regimes:
+                    is_mr_or_range = idea.strategy_family in [StrategyFamily.MEAN_REVERSION, StrategyFamily.RANGE]
                     trend_dir = 1 if getattr(regime_state, "direction", 0) == 1 else (-1 if getattr(regime_state, "direction", 0) == -1 else 0)
                     trade_dir = 1 if idea.direction == "long" else -1
                     
-                    if is_mr and trend_dir != 0 and trade_dir != trend_dir:
-                        # Suppressing counter-trend mean reversion in strong trends
+                    if is_mr_or_range and trend_dir != 0 and trade_dir != trend_dir:
+                        # Suppressing counter-trend fades in strong trends
                         continue
                 
+                # Rule: Suppress new trend entries if trend is exhausted or overextended
+                if regime in [RegimeType.LATE_TREND, RegimeType.EXHAUSTION_RISK] and idea.strategy_family == StrategyFamily.TREND:
+                    if idea.confidence_score < 0.9: # Only super-high conviction late entries
+                         continue
+
                 # Rule: Suppress breakouts in range if health is low (lack of conviction)
                 if regime == RegimeType.RANGE and idea.strategy_family == StrategyFamily.BREAKOUT:
                     if getattr(regime_state, "health_score", 1.0) < 0.6:

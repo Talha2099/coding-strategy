@@ -55,7 +55,7 @@ class TrendFollower(BaseStrategy):
                    
         return False
 
-    def confirm_entry(self, candles: List[Candle]) -> bool:
+    def confirm_entry(self, candles: List[Candle], regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> bool:
         # Require a candle close in direction of trend
         last = candles[-1]
         features = TechnicalFeatureEngine.get_candle_features(candles)

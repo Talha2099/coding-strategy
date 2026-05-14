@@ -108,9 +108,6 @@ class EventDrivenBacktester:
             self.monitor.add_regime_record(regime.value)
             
             # MTF Regime Analysis
-            # For backtest, we might not have actual separate timeframes ready, 
-            # so we'll simulate them using the same history (simplified)
-            # In a real setup, we'd use resampled candles for MTF/HTF.
             mtf_state = self.mtf_engine.analyze(
                 ltf_candles=self.candle_history[symbol],
                 mtf_candles=self.candle_history[symbol], # Should be resampled
@@ -141,7 +138,7 @@ class EventDrivenBacktester:
             optimized_ideas = ideas
         
         for idea in optimized_ideas:
-            self.process_trade_idea(idea, tick.ts, regime)
+            self.process_trade_idea(idea, tick.ts, regime, regime_state)
         
         # 5. Financing & Corporate Actions Check (at 22:00 UTC)
         if tick.ts.hour == 22 and tick.ts.minute == 0:
@@ -184,7 +181,7 @@ class EventDrivenBacktester:
             )
             self.candle_history[symbol][-1] = updated_candle
 
-    def process_trade_idea(self, idea: TradeIdea, dt: datetime, regime: RegimeType):
+    def process_trade_idea(self, idea: TradeIdea, dt: datetime, regime: RegimeType, regime_state: RegimeState):
         symbol = idea.symbol
         spec = self.contract_manager.get_spec(symbol)
         session = self.contract_manager.get_session(dt)
@@ -218,7 +215,7 @@ class EventDrivenBacktester:
             rr=idea.risk_reward_ratio
         )
         
-        valid, msg = self.risk_engine.validate_trade(idea, size, self.equity_curve[-1], spec.spread_base)
+        valid, msg = self.risk_engine.validate_trade(idea, size, self.equity_curve[-1], regime_state, spec.spread_base)
         if not valid: 
             system_logger.log_event("RISK_REJECTION", {"reason": msg, "symbol": symbol, "ts": dt.isoformat()})
             return f"REJECTED_RISK_{msg}"

@@ -5,19 +5,28 @@ from typing import Dict, List, Optional, Literal, Any
 
 class RegimeType(Enum):
     # Trend States
+    NO_TREND = "no_trend"
+    PRE_TREND_COMPRESSION = "pre_trend_compression"
+    EARLY_TREND = "early_trend"
+    CONFIRMED_TREND = "confirmed_trend"
+    MID_TREND = "mid_trend"
+    PULLBACK_IN_TREND = "pullback_in_trend"
+    CONTINUATION_READY = "continuation_ready"
+    LATE_TREND = "late_trend"
+    EXHAUSTION_RISK = "exhaustion_risk"
+    REVERSAL_RISK = "reversal_risk"
+    TREND_FAILED = "trend_failed"
+    TREND_TO_RANGE = "trend_to_range"
+    
+    # Directional Trend tags (for strategy decisions)
     TREND_UP = "trend_up"
     TREND_DOWN = "trend_down"
-    EARLY_TREND = "early_trend"
-    MID_TREND = "mid_trend"
-    LATE_TREND = "late_trend"
-    PULLBACK_IN_TREND = "pullback_in_trend"
     
     # Other States
     RANGE = "range"
     BREAKOUT_PREP = "breakout_prep"
     MEAN_REVERTING = "mean_reverting"
     VOLATILE_UNSTABLE = "volatile_unstable"
-    REVERSAL_RISK = "reversal_risk"
     GAP_DRIVEN = "gap_driven"
     
     # Breakout Lifecycle
@@ -25,15 +34,31 @@ class RegimeType(Enum):
     POST_BREAKOUT_CONTINUATION = "post_breakout_continuation"
     FALSE_BREAKOUT_RISK = "false_breakout_risk"
     
-    # Generic (for backward compatibility if needed)
+    # Range Lifecycle States
+    RANGE_FORMING = "range_forming"
+    RANGE_ESTABLISHED = "range_established"
+    RANGE_HIGH_TOUCH = "range_high_touch"
+    RANGE_LOW_TOUCH = "range_low_touch"
+    MEAN_REVERSION_SETUP = "mean_reversion_setup"
+    MEAN_REVERSION_TRIGGERED = "mean_reversion_triggered"
+    MEAN_REVERSION_IN_PROGRESS = "mean_reversion_in_progress"
+    MID_RANGE = "mid_range"
+    TARGET_ZONE_APPROACHING = "target_zone_approaching"
+    RANGE_FADE = "range_fade"
+    RANGE_EXPANSION_ATTEMPT = "range_expansion_attempt"
+    RANGE_BROKEN_UPSIDE = "range_broken_upside"
+    RANGE_BROKEN_DOWNSIDE = "range_broken_downside"
+    RANGE_TO_TREND = "range_to_trend"
+    FAILED_MEAN_REVERSION = "failed_mean_reversion"
+    RANGE_EXHAUSTION = "range_exhaustion"
+    NO_TRADE = "no_trade"
+    
+    # Legacy / Compatibility
     TREND = "trend" 
     BREAKOUT = "breakout"
-    PULLBACK_CONTINUATION = "pullback_continuation"
-    TREND_STABLE = "trend_stable"
     TREND_IGNITION = "trend_ignition"
     TREND_EXHAUSTION = "trend_exhaustion"
     TREND_REVERSAL = "trend_reversal"
-    PRE_TREND = "pre_trend"
 
 class StrategyFamily(Enum):
     TREND = "trend"
@@ -45,7 +70,15 @@ class StrategyFamily(Enum):
     VOLATILITY = "volatility"
 
 class StrategyPhase(Enum):
-    # Setup States
+    # Lifecycle Phases
+    ANALYSIS = "analysis"
+    PLANNING = "planning"
+    EXECUTION = "execution"
+    MANAGEMENT = "management"
+    INVALIDATION = "invalidation"
+    EXIT = "exit"
+
+    # Setup Details
     SETUP_DETECTED = "setup_detected"
     SETUP_VALIDATED = "setup_validated"
     ENTRY_ARMED = "entry_armed"
@@ -58,16 +91,13 @@ class StrategyPhase(Enum):
     TRAILING = "trailing"
     LATE_STAGE = "late_stage"
     
-    # Termination States
+    # Termination
     EXIT_TRIGGERED = "exit_triggered"
-    INVALIDATED = "invalidated"
     FAILURE = "failure"
     CLOSED = "closed"
     
-    # Backward compatibility mappings (optional, but keep basic ones)
+    # Legacy
     PRE_CONDITION = "pre_condition"
-    ACTIVE = "active"
-    EXHAUSTION = "exhaustion"
 
 @dataclass(frozen=True)
 class TradeIdea:

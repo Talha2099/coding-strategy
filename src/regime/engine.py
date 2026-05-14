@@ -35,15 +35,10 @@ class RegimeEngine:
         bb_width = features["bb_width"][-1]
         bb_squeeze = features["bb_squeeze"][-1]
         sma_20_slope = features["sma_20_slope"][-1]
-        sma_20_curve = features["sma_20_curve"][-1]
-        exhaustion_score = features["exhaustion_score"][-1]
         
         # 1. Base Logic Flags
         is_high_vol = curr_atr > hist_atr_mean * 2.0
         is_trending_adx = curr_adx > 25
-        is_strong_trend_adx = curr_adx > 45
-        is_bull_stack = features["ema_20"][-1] > features["ema_50"][-1] > features["ema_200"][-1]
-        is_bear_stack = features["ema_20"][-1] < features["ema_50"][-1] < features["ema_200"][-1]
         
         rel_vol = features["rel_vol"][-1]
         breakout_dist_upper = features["breakout_dist_upper"][-1]
@@ -52,10 +47,18 @@ class RegimeEngine:
         # 2. Detect Regimes & Lifecycle Stages
         probabilities = {r.value: 0.0 for r in RegimeType}
         regime = RegimeType.RANGE # Default
-        stage = 0 # Default to pre-trend
+        stage = 0 
         
         # Determine core direction
         is_up = sma_20_slope > 0
+        direction = 1 if is_up else -1 if sma_20_slope < 0 else 0
+        
+        # Live Health Monitoring (needed for classification)
+        health_metrics = self.health_engine.evaluate_health(candles, "trend", direction)
+        health = health_metrics["health_score"]
+        exhaustion = health_metrics["exhaustion_risk"]
+        overextension = health_metrics["overextension"]
+        persistence = health_metrics["persistence"]
         
         # TRANSITION LOGIC & REGIME DETECTION
         
@@ -63,77 +66,95 @@ class RegimeEngine:
         if is_high_vol and curr_adx < 20:
              regime = RegimeType.VOLATILE_UNSTABLE
              stage = 0
-             probabilities[regime.value] = 0.9
         elif abs(features["gap_size"][-1]) > 0.01:
              regime = RegimeType.GAP_DRIVEN
              stage = 0
-             probabilities[regime.value] = 0.8
 
-        # B. BREAKOUT LIFECYCLE (Priority Detection)
+        # B. TREND LIFECYCLE (Priority Detection)
+        elif is_trending_adx or health > 0.4:
+            if exhaustion > 0.8:
+                regime = RegimeType.EXHAUSTION_RISK
+                stage = 6
+            elif health_metrics["acceleration"] < -0.0001 and curr_adx > 40:
+                regime = RegimeType.REVERSAL_RISK
+                stage = 7
+            elif health_metrics["is_continuation"] > 0 and persistence > 0.7:
+                regime = RegimeType.MID_TREND if health > 0.7 else RegimeType.CONFIRMED_TREND
+                stage = 3
+            elif curr_adx < 25 and health > 0.5:
+                regime = RegimeType.EARLY_TREND
+                stage = 1
+            elif (is_up and curr_price < features["ema_20"][-1]) or (not is_up and curr_price > features["ema_20"][-1]):
+                if health > 0.6: 
+                    regime = RegimeType.CONTINUATION_READY
+                    stage = 4
+                else:
+                    regime = RegimeType.PULLBACK_IN_TREND
+                    stage = 4
+            elif overextension > 2.5:
+                regime = RegimeType.LATE_TREND
+                stage = 5
+            else:
+                regime = RegimeType.TREND_UP if is_up else RegimeType.TREND_DOWN
+                stage = 2
+
+        # C. BREAKOUT LIFECYCLE
         elif (breakout_dist_upper > 0 or breakout_dist_lower < 0) and rel_vol > 1.2:
-            # Active breakout or immediate post-breakout
             if rel_vol > 2.0 or abs(features["returns"][-1]) > curr_atr / curr_price:
                 regime = RegimeType.BREAKOUT_ACTIVE
                 stage = 1
             else:
                 regime = RegimeType.POST_BREAKOUT_CONTINUATION
                 stage = 2
-            probabilities[regime.value] = 0.8
-            
-            # Detect False Breakout Risk (Lagging price, fading volume)
-            if rel_vol < 1.0 and abs(features["returns"][-1]) < 1e-4:
-                regime = RegimeType.FALSE_BREAKOUT_RISK
-                probabilities[regime.value] = 0.6
 
-        # C. TREND LIFECYCLE
-        elif is_bull_stack or is_bear_stack or is_trending_adx:
-            regime = RegimeType.TREND_UP if is_up else RegimeType.TREND_DOWN
-            
-            if exhaustion_score > 0.5 or (is_strong_trend_adx and sma_20_curve < 0):
-                regime = RegimeType.TREND_EXHAUSTION
-                stage = 5
-            elif (is_bull_stack and is_up) or (is_bear_stack and not is_up):
-                dist_ema20 = (curr_price - features["ema_20"][-1]) / (curr_atr + 1e-9)
-                if (is_up and -1.0 < dist_ema20 < 0.2) or (not is_up and -0.2 < dist_ema20 < 1.0):
-                    regime = RegimeType.PULLBACK_IN_TREND
-                    stage = 4
-                else:
-                    regime = RegimeType.MID_TREND
-                    stage = 3 # Healthy continuation
-            elif is_trending_adx:
-                regime = RegimeType.EARLY_TREND
-                stage = 2 # Confirmed start
-
-            # Final check for Reversal Risk in Trend
-            if sma_20_curve < -2.0 and curr_adx > 30: # Sharp deceleration
-                regime = RegimeType.REVERSAL_RISK
-                probabilities[regime.value] = 0.7
-
-        # D. PRE-BREAKOUT / COMPRESSION
+        # D. PRE_TREND / COMPRESSION
         elif bb_squeeze > 0.5 or bb_width < np.percentile(features["bb_width"][-100:], 25):
-            regime = RegimeType.BREAKOUT_PREP
+            regime = RegimeType.PRE_TREND_COMPRESSION
             stage = 0
-            probabilities[regime.value] = 0.8
         
-        # E. MEAN REVERTING / RANGE
+        # E. RANGE & MEAN REVERSION LIFECYCLE
         else:
-            if curr_rsi > 70 or curr_rsi < 30 or abs(features["zscore"][-1]) > 2.0:
+            is_range_context = curr_adx < 20 and hurst < 0.55
+            zscore = features["zscore"][-1]
+            
+            # Boundary Proximity
+            at_high = breakout_dist_upper < 0.15 and breakout_dist_upper > -0.05
+            at_low = breakout_dist_lower > -0.15 and breakout_dist_lower < 0.05
+            
+            if is_range_context:
+                if (curr_rsi > 70 or curr_rsi < 30 or abs(zscore) > 2.2):
+                    regime = RegimeType.MEAN_REVERSION_SETUP
+                    stage = 1
+                elif at_high:
+                    regime = RegimeType.RANGE_HIGH_TOUCH
+                    stage = 2
+                elif at_low:
+                    regime = RegimeType.RANGE_LOW_TOUCH
+                    stage = 2
+                elif hurst < 0.4 and bb_width < np.mean(features["bb_width"][-50:]):
+                    regime = RegimeType.RANGE_ESTABLISHED
+                    stage = 1
+                elif bb_squeeze > 0.4:
+                    regime = RegimeType.PRE_TREND_COMPRESSION
+                    stage = 0
+                else:
+                    regime = RegimeType.RANGE_FORMING
+                    stage = 0
+            elif abs(zscore) > 2.5 and hurst < 0.45:
                 regime = RegimeType.MEAN_REVERTING
-                probabilities[regime.value] = 0.7
+                stage = 2
             else:
                 regime = RegimeType.RANGE
-                probabilities[regime.value] = 0.6
+                stage = 0
+        
+        probabilities[regime.value] = 1.0 # Simplified for now
 
         self.last_regime = regime
         self.regime_history.append(regime)
         if len(self.regime_history) > 100: self.regime_history.pop(0)
         
-        # Phase 6: Live Health Monitoring
-        direction = 1 if is_up else -1 if sma_20_slope < 0 else 0
-        health_metrics = self.health_engine.evaluate_health(candles, regime.value, direction)
-        
         # Phase 9: Persistence Analysis
-        hurst = TrendPersistenceEngine.compute_hurst([c.close for c in candles[-100:]])
+        hurst = health_metrics["hurst"]
         
         return RegimeState(
             symbol=symbol,
@@ -143,11 +164,13 @@ class RegimeEngine:
             volatility=curr_vol,
             trend_strength=curr_adx,
             direction=direction,
-            health_score=health_metrics["health_score"],
+            health_score=health,
             hurst=hurst,
+            persistence=persistence,
+            candle_quality=health_metrics["candle_quality"],
             acceleration=health_metrics["acceleration"],
-            overextension=health_metrics["overextension"],
-            exhaustion_risk=health_metrics["exhaustion_risk"],
+            overextension=overextension,
+            exhaustion_risk=exhaustion,
             timestamp=candles[-1].ts
         )
 

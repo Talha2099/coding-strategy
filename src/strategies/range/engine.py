@@ -1,164 +1,119 @@
 from typing import List, Optional, Dict, Any
-from src.strategies.base import BaseStrategy
-from src.core.types.strategy import TradeIdea, RegimeType, StrategyFamily, StrategyPhase
 from src.core.types.trading import Candle, RegimeState, MTFRegimeState
-from src.features.technical_engine import TechnicalFeatureEngine
+from src.core.types.strategy import TradeIdea, RegimeType, StrategyFamily, StrategyPhase
 from src.core.contracts.spec import InstrumentSpec
-import numpy as np
+from src.strategies.base import BaseStrategy
+
+from src.strategies.range.analysis import RangeAnalysisEngine
+from src.strategies.range.planning import RangePlanningEngine
+from src.strategies.range.execution import RangeExecutionEngine
+from src.strategies.range.management import RangeManagementEngine
 
 class RangeTradingLifecycleEngine(BaseStrategy):
     """
     Implements a complete range-trading lifecycle.
-    Covers:
-    - stable range
-    - expanding range
-    - weakening boundary defense
-    - repeated boundary touch
-    - mid-range rotation
-    - range false break
-    - range-to-breakout transition
-    - range breakdown
+    Uses dedicated engines for Analysis, Planning, Execution, and Management.
     """
-    def __init__(self, name: str, spec: InstrumentSpec, subtype: str = "classic"):
+    def __init__(self, name: str, spec: InstrumentSpec, subtype: str = "lifecycle"):
         super().__init__(name, StrategyFamily.RANGE, spec)
         self.subtype = subtype
-        self.current_phase = StrategyPhase.SETUP_DETECTED
+        self.current_phase = StrategyPhase.ANALYSIS
+        
+        # Internal Engines
+        self.analyzer = RangeAnalysisEngine()
+        self.planner = RangePlanningEngine()
+        self.executor = RangeExecutionEngine()
+        self.manager = RangeManagementEngine()
 
     def is_valid_regime(self, regime: RegimeType) -> bool:
-        return regime in [RegimeType.RANGE, RegimeType.MEAN_REVERTING, RegimeType.VOLATILE_UNSTABLE]
+        return regime in [
+            RegimeType.RANGE, RegimeType.RANGE_FORMING, RegimeType.RANGE_ESTABLISHED,
+            RegimeType.MEAN_REVERTING, RegimeType.MID_RANGE, RegimeType.VOLATILE_UNSTABLE
+        ]
+
+    def analyze_setup(self, candles: List[Candle], regime_state: RegimeState, mtf_state: Optional[MTFRegimeState]) -> Dict[str, Any]:
+        if not mtf_state:
+            # Fallback for STF
+            mtf_state = MTFRegimeState(regime_state.symbol, regime_state, regime_state, regime_state, "neutral", 0.0, regime_state.timestamp)
+        return self.analyzer.analyze(candles, mtf_state)
 
     def detect_setup(self, candles: List[Candle], regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> bool:
-        """
-        Phase A: Range detection.
-        Handles: stable range, repeated boundary touch.
-        """
-        if len(candles) < 50: return False
-        features = TechnicalFeatureEngine.get_candle_features(candles)
+        self.current_phase = StrategyPhase.ANALYSIS
+        analysis = self.analyze_setup(candles, regime_state, mtf_state)
         
-        # 1. Trendless context (Stable range scenario)
-        low_adx = features["adx"][-1] < 20.0
+        # Log Analysis
+        from src.core.utils.logger import system_logger
+        system_logger.log_event("RANGE_ANALYSIS", {
+            "symbol": regime_state.symbol,
+            "regime": regime_state.regime_type,
+            "health": analysis["health"],
+            "hurst": analysis["hurst"],
+            "quality": analysis["quality_score"],
+            "is_rangy": analysis["is_rangy"]
+        })
+
+        self.current_phase = StrategyPhase.PLANNING
+        plan = self.planner.plan(candles, analysis)
         
-        # 2. Volatility Stability
-        stable_vol = features["bb_width"][-1] < np.mean(features["bb_width"][-100:]) * 1.2
-        
-        # 3. Boundary testing (Repeated boundary touch scenario)
-        dist_up = features["breakout_dist_upper"][-1]
-        dist_low = features["breakout_dist_lower"][-1]
-        near_edge = abs(dist_up) < 0.25 or abs(dist_low) < 0.25
-        
-        setup_valid = low_adx and stable_vol and near_edge
-        
-        if setup_valid:
+        if plan:
+            system_logger.log_event("RANGE_PLAN_CREATED", {
+                "symbol": regime_state.symbol,
+                "entry_style": plan["entry_style"],
+                "direction": "long" if plan["direction"] == 1 else "short",
+                "risk_pct": plan["risk_pct"]
+            })
             self.current_phase = StrategyPhase.SETUP_DETECTED
-            
-        return setup_valid
-
-    def confirm_entry(self, candles: List[Candle]) -> bool:
-        """
-        Phase B: Edge entry.
-        Handles: range false break.
-        """
-        features = TechnicalFeatureEngine.get_candle_features(candles)
-        last = candles[-1]
-        
-        # 1. Price rejection (False break recovery)
-        rejection = features["upper_wick_pct"][-1] > 0.4 or features["lower_wick_pct"][-1] > 0.4
-        
-        # 2. No breakout pressure
-        no_pressure = features["bb_expansion"][-1] == 0
-        
-        # 3. Directional turn
-        dist_up = features["breakout_dist_upper"][-1]
-        dist_low = features["breakout_dist_lower"][-1]
-        
-        is_fading_high = dist_up > -0.1 and last.close < last.open
-        is_fading_low = dist_low < 0.1 and last.close > last.open
-        
-        confirmed = rejection and no_pressure and (is_fading_high or is_fading_low)
-        
-        if confirmed:
-            self.current_phase = StrategyPhase.ENTRY_TRIGGERED
-            
-        return confirmed
-
-    def invalidate_setup(self, candles: List[Candle], regime_state: RegimeState) -> bool:
-        """
-        Handles: weakening boundary defense, range-to-breakout transition.
-        """
-        features = TechnicalFeatureEngine.get_candle_features(candles)
-        
-        # Compression signals breakout risk
-        is_compressing = features["bb_squeeze"][-1] > 0.8
-        
-        # Weakening defense: price sticks to the edge with high volume
-        near_edge = abs(features["breakout_dist_upper"][-1]) < 0.05 or abs(features["breakout_dist_lower"][-1]) < 0.05
-        vol_surge = features["rel_vol"][-1] > 2.0
-        
-        if is_compressing or (near_edge and vol_surge):
-            self.current_phase = StrategyPhase.INVALIDATED
             return True
-            
         return False
 
-    def define_stop(self, candles: List[Candle]) -> float:
-        features = TechnicalFeatureEngine.get_candle_features(candles)
-        last = candles[-1]
-        atr = features["atr"][-1]
-        if last.close > last.open: # Fade low
-             return min(c.low for c in candles[-10:]) - 0.5 * atr
-        else: # Fade high
-             return max(c.high for c in candles[-10:]) + 0.5 * atr
-
-    def define_target(self, candles: List[Candle]) -> float:
-        features = TechnicalFeatureEngine.get_candle_features(candles)
-        mid = features["bb_mid"][-1]
-        return features["bb_upper"][-1] if candles[-1].close < mid else features["bb_lower"][-1]
-
-    def on_trade_update(self, candles: List[Candle], idea: TradeIdea, regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> Optional[Dict]:
-        """
-        Full lifecycle state machine.
-        Handles: mid-range rotation, range breakdown.
-        """
-        if len(candles) < 2: return None
-        features = TechnicalFeatureEngine.get_candle_features(candles)
-        last_close = candles[-1].close
-        updates = {}
-        mid = features["bb_mid"][-1]
+    def confirm_entry(self, candles: List[Candle], regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> bool:
+        analysis = self.analyze_setup(candles, regime_state, mtf_state)
+        plan = self.planner.plan(candles, analysis)
+        if not plan: return False
         
-        # Transition to Position Open
-        if idea.lifecycle_phase == StrategyPhase.ENTRY_TRIGGERED:
-             updates['lifecycle_phase'] = StrategyPhase.POSITION_OPEN
+        self.current_phase = StrategyPhase.EXECUTION
+        if self.executor.check_trigger(candles, plan, analysis):
+            from src.core.utils.logger import system_logger
+            system_logger.log_event("RANGE_ENTRY_TRIGGERED", {
+                "symbol": regime_state.symbol,
+                "entry_style": plan["entry_style"],
+                "direction": "long" if plan["direction"] == 1 else "short"
+            })
+            self.current_phase = StrategyPhase.ENTRY_TRIGGERED
+            return True
+        return False
 
-        # 1. Mid-range Rotation Profit taking
-        is_past_mid = (idea.direction == "long" and last_close > mid) or (idea.direction == "short" and last_close < mid)
-        if is_past_mid and not idea.metadata.get('scaled_mid', False):
-             updates['scaling_action'] = "reduce"
-             updates['scaling_size'] = 0.5
-             updates['stop_loss'] = idea.entry_price # Break-even
-             updates['metadata'] = {**idea.metadata, 'scaled_mid': True}
-             updates['lifecycle_phase'] = StrategyPhase.PARTIAL_EXIT
-
-        # 2. Range breakdown / transition (Adverse breakout)
-        abs_breakout = (idea.direction == "long" and last_close < features["bb_lower"][-1]) or \
-                       (idea.direction == "short" and last_close > features["bb_upper"][-1])
+    def on_trade_update(self, candles: List[Candle], idea: TradeIdea, regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> Optional[Dict[str, Any]]:
+        self.current_phase = StrategyPhase.MANAGEMENT
+        updates = self.manager.evaluate(candles, idea, regime_state)
         
-        if abs_breakout or features["bb_expansion"][-1] > 0:
-             updates['exit'] = True
-             updates['exit_reason'] = "range_breakdown"
-             updates['lifecycle_phase'] = StrategyPhase.FAILURE
-             return updates
+        if updates:
+            from src.core.utils.logger import system_logger
+            if updates.get("exit"):
+                system_logger.log_event("RANGE_EXIT_DECISION", {
+                    "symbol": idea.symbol,
+                    "reason": updates.get("exit_reason"),
+                    "pnl": (candles[-1].close - idea.entry_price) * (1 if idea.direction == "long" else -1)
+                })
+            elif "partial_exit" in updates:
+                 system_logger.log_event("RANGE_PARTIAL_EXIT", {
+                    "symbol": idea.symbol,
+                    "size": updates["partial_exit"]
+                })
+        
+        return updates
 
-        # 3. Continuation
-        if idea.lifecycle_phase == StrategyPhase.POSITION_OPEN and abs(last_close - idea.entry_price) / idea.entry_price > 0.005:
-              updates['lifecycle_phase'] = StrategyPhase.CONTINUATION
-
-        return updates if updates else None
+    def score_setup(self, candles: List[Candle], regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> float:
+        analysis = self.analyze_setup(candles, regime_state, mtf_state)
+        return float(analysis["quality_score"])
 
     def build_trade_idea(self, symbol: str, candles: List[Candle], regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> Optional[TradeIdea]:
+        analysis = self.analyze_setup(candles, regime_state, mtf_state)
+        plan = self.planner.plan(candles, analysis)
+        if not plan: return None
+        
         entry = candles[-1].close
-        stop = self.define_stop(candles)
-        target = self.define_target(candles)
-        rr = abs(target - entry) / (abs(entry - stop) + 1e-9)
+        direction = "long" if plan["direction"] == 1 else "short"
         
         return TradeIdea(
             symbol=symbol,
@@ -166,17 +121,28 @@ class RangeTradingLifecycleEngine(BaseStrategy):
             timeframe="M5",
             strategy_name=self.name,
             strategy_family=self.family,
-            strategy_subtype=self.subtype,
-            direction="long" if entry < target else "short",
+            strategy_subtype=plan["entry_style"],
+            direction=direction,
             entry_price=entry,
-            stop_loss=stop,
-            take_profit=target,
-            risk_reward_ratio=rr,
-            confidence_score=0.8,
+            stop_loss=plan["stop_loss"],
+            take_profit=plan["targets"][-1],
+            risk_reward_ratio=abs(plan["targets"][-1] - entry) / (abs(entry - plan["stop_loss"]) + 1e-9),
+            confidence_score=analysis["quality_score"],
             regime_tag=RegimeType(regime_state.regime_type),
             lifecycle_phase=self.current_phase,
-            invalidation_price=stop,
-            holding_period_hint="range_trade",
+            invalidation_price=plan["invalidation"],
             timestamp=candles[-1].ts,
-            metadata={}
+            metadata={
+                **plan["metadata"],
+                "targets": plan["targets"],
+                "range_health": analysis["health"]
+            }
         )
+
+    def define_stop(self, candles: List[Candle]) -> float:
+        # Fallback for contract
+        return candles[-1].close * 0.99
+
+    def define_target(self, candles: List[Candle]) -> float:
+        # Fallback for contract
+        return candles[-1].close * 1.01

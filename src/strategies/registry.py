@@ -28,8 +28,22 @@ class StrategyRouter:
         volatility = regime_state.volatility
         
         # 1. Activation & Suppression Logic
-        # Suppress all except Mean Reversion in high toxic volatility if needed
-        suppress_breakout = volatility > 0.05 and regime == RegimeType.VOLATILE_UNSTABLE
+        # Trend-specific suppression rules
+        is_strong_trend = regime in [
+            RegimeType.EARLY_TREND, RegimeType.CONFIRMED_TREND, RegimeType.MID_TREND, 
+            RegimeType.TREND_UP, RegimeType.TREND_DOWN, RegimeType.BREAKOUT_ACTIVE,
+            RegimeType.CONTINUATION_READY
+        ]
+        health = getattr(regime_state, "health_score", 0.5)
+        
+        suppress_mr = is_strong_trend and health > 0.6
+        suppress_breakout = (volatility > 0.05 and regime == RegimeType.VOLATILE_UNSTABLE) or \
+                            (regime in [RegimeType.RANGE, RegimeType.RANGE_ESTABLISHED] and health < 0.4)
+        
+        suppress_range = is_strong_trend and health > 0.7
+        
+        # Only allow pullback continuation in mature trends
+        is_mature_trend = regime in [RegimeType.MID_TREND, RegimeType.LATE_TREND, RegimeType.EXHAUSTION_RISK]
         
         for name, strategy in self.strategies.items():
             # Regime Filtering
@@ -37,9 +51,19 @@ class StrategyRouter:
                 continue
                 
             # Family Suppression
+            if strategy.family == StrategyFamily.MEAN_REVERSION and suppress_mr:
+                continue
+            if strategy.family == StrategyFamily.RANGE and (suppress_mr or suppress_range):
+                continue
             if strategy.family == StrategyFamily.BREAKOUT and suppress_breakout:
                 continue
                 
+            # Special case: Trend Following in Mature stages
+            if strategy.family == StrategyFamily.TREND and is_mature_trend:
+                # In mature trends, we prefer pullbacks over new breakouts
+                # This could be handled inside the strategy itself, but we can hint it here
+                pass
+
             # Technical Setup Detection
             if strategy.detect_setup(candles, regime_state, mtf_state):
                 # Check for early invalidation
@@ -47,7 +71,7 @@ class StrategyRouter:
                     continue
 
                 # Trigger Confirmation
-                if strategy.confirm_entry(candles):
+                if strategy.confirm_entry(candles, regime_state, mtf_state):
                     idea = strategy.build_trade_idea(symbol, candles, regime_state, mtf_state)
                     if idea:
                         ideas.append(idea)

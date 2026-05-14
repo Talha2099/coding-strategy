@@ -120,6 +120,8 @@ class RegimeState:
     direction: int # 1 for bullish, -1 for bearish, 0 for neutral
     health_score: float = 0.5 # 0 to 1
     hurst: float = 0.5
+    persistence: float = 0.5
+    candle_quality: float = 0.5
     acceleration: float = 0.0
     overextension: float = 0.0 # Score reflecting distance from mean
     exhaustion_risk: float = 0.0 # 0 to 1
