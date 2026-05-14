@@ -7,6 +7,7 @@ from src.core.contracts.spec import ContractManager, InstrumentSpec, AssetClass
 from src.risk.asset_aware_risk import MultiAssetRiskEngine, CrashProtectionModule
 from src.execution.engine.base import ExecutionEngine
 from src.regime.engine import RegimeEngine
+from src.regime.mtf_engine import MTFRegimeEngine
 from src.strategies.registry import StrategyRouter
 from src.strategies.breakout.donchian import DonchianBreakout
 from src.research.optimization.bayesian_engine import BayesianOptimizationEngine, TuningObjectiveFactory
@@ -45,7 +46,8 @@ def objective(params: Dict[str, Any]):
     
     exec_eng = ExecutionEngine()
     regime_eng = RegimeEngine()
-    router = StrategyRouter()
+    mtf_eng = MTFRegimeEngine()
+    router = StrategyRouter(cm)
     crash = CrashProtectionModule()
     
     # PARAMETER 2: Strategy Hyperparameter
@@ -56,6 +58,7 @@ def objective(params: Dict[str, Any]):
         risk_engine=risk,
         exec_engine=exec_eng,
         regime_engine=regime_eng,
+        mtf_engine=mtf_eng,
         strategy_router=router,
         crash_module=crash
     )

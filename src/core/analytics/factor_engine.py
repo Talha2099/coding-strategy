@@ -44,6 +44,23 @@ class FactorEngine:
             if len(self.pnl_history) > self.window_size:
                 self.pnl_history.pop(0)
 
+    @staticmethod
+    def calculate_psi(expected: np.ndarray, actual: np.ndarray, buckets: int = 10) -> float:
+        breakpoints = np.percentile(expected, np.linspace(0, 100, buckets + 1))
+        breakpoints = np.unique(breakpoints)
+        if len(breakpoints) < 2: return 0.0
+        
+        expected_counts, _ = np.histogram(expected, bins=breakpoints)
+        actual_counts, _ = np.histogram(actual, bins=breakpoints)
+        
+        expected_dist = expected_counts / len(expected)
+        actual_dist = actual_counts / len(actual)
+        
+        expected_dist = np.where(expected_dist == 0, 1e-4, expected_dist)
+        actual_dist = np.where(actual_dist == 0, 1e-4, actual_dist)
+        
+        return float(np.sum((expected_dist - actual_dist) * np.log(expected_dist / actual_dist)))
+
     def analyze_factors(self) -> List[Dict]:
         """
         Calculates IC, T-Stats, and Drift for each factor.
@@ -56,12 +73,10 @@ class FactorEngine:
             if len(values) != len(self.returns_history):
                 continue
 
-            # Calculate Spearman Rank Correlation (IC)
-            # Simplified using numpy for performance
             vx = np.array(values)
             vy = np.array(self.returns_history)
             
-            # Rank correlations
+            # Spearman Rank Correlation (IC)
             idx_x = vx.argsort()
             idx_y = vy.argsort()
             rank_x = np.empty_like(idx_x)
@@ -76,6 +91,11 @@ class FactorEngine:
             if len(self.factor_performance[name]) > 50:
                 self.factor_performance[name].pop(0)
 
+            # Drift Check (PSI)
+            # Use first half of window as baseline for PSI comparison
+            mid = len(values) // 2
+            psi = self.calculate_psi(vx[:mid], vx[mid:]) if mid > 10 else 0.0
+
             # Detect Decay (comparing recent IC to historical IC)
             recent_ic = np.mean(self.factor_performance[name][-10:])
             hist_ic = np.mean(self.factor_performance[name])
@@ -84,9 +104,10 @@ class FactorEngine:
             metrics.append({
                 "name": name,
                 "ic": round(ic, 4),
+                "psi": round(psi, 4),
                 "decay": round(decay, 4),
                 "impact": "HIGH" if abs(ic) > 0.1 else "LOW",
-                "status": "DEGRADING" if decay > 0.02 else "STABLE"
+                "status": "DEGRADING" if decay > 0.02 or psi > 0.1 else "STABLE"
             })
 
         return sorted(metrics, key=lambda x: abs(x["ic"]), reverse=True)

@@ -4,16 +4,34 @@ from enum import Enum
 from typing import Dict, List, Optional, Literal
 
 class RegimeType(Enum):
-    TRENDING_BULL = "trending_bull"
-    TRENDING_BEAR = "trending_bear"
-    BREAKOUT = "breakout"
-    PULLBACK = "pullback"
-    RANGING = "ranging"
-    MEAN_REVERSION = "mean_reversion"
-    GAP = "gap"
+    # Trend States
+    TREND_UP = "trend_up"
+    TREND_DOWN = "trend_down"
+    EARLY_TREND = "early_trend"
+    MID_TREND = "mid_trend"
+    LATE_TREND = "late_trend"
+    PULLBACK_IN_TREND = "pullback_in_trend"
+    
+    # Other States
+    RANGE = "range"
+    BREAKOUT_PREP = "breakout_prep"
+    MEAN_REVERTING = "mean_reverting"
     VOLATILE_UNSTABLE = "volatile_unstable"
+    REVERSAL_RISK = "reversal_risk"
+    GAP_DRIVEN = "gap_driven"
+    
+    # Generic (for backward compatibility if needed)
+    TREND = "trend" 
+    BREAKOUT = "breakout"
+    PULLBACK_CONTINUATION = "pullback_continuation"
+    TREND_STABLE = "trend_stable"
+    TREND_IGNITION = "trend_ignition"
+    TREND_EXHAUSTION = "trend_exhaustion"
+    TREND_REVERSAL = "trend_reversal"
+    PRE_TREND = "pre_trend"
 
 class StrategyFamily(Enum):
+    TREND = "trend"
     BREAKOUT = "breakout"
     PULLBACK = "pullback"
     MEAN_REVERSION = "mean_reversion"

@@ -4,75 +4,64 @@ from src.core.types.strategy import TradeIdea, RegimeType, StrategyFamily
 from src.core.types.trading import Candle, RegimeState, MTFRegimeState
 from src.features.technical_engine import TechnicalFeatureEngine
 from src.core.contracts.spec import InstrumentSpec
+import numpy as np
 
-class GapFill(BaseStrategy):
+class ImbalanceBreakout(BaseStrategy):
     """
-    Fades gaps that show exhaustion, targeting the previous close.
+    Identifies Fair Value Gaps (FVG) and trades breakouts through them.
     """
-    def __init__(self, spec: InstrumentSpec, min_gap_pct: float = 0.003):
-        super().__init__("GapFill", StrategyFamily.GAP, spec)
-        self.min_gap_pct = min_gap_pct
+    def __init__(self, spec: InstrumentSpec):
+        super().__init__("ImbalanceBreakout", StrategyFamily.BREAKOUT, spec)
 
     def is_valid_regime(self, regime: RegimeType) -> bool:
-        return regime in [RegimeType.GAP_DRIVEN, RegimeType.MEAN_REVERTING, RegimeType.LATE_TREND]
+        return regime in [RegimeType.BREAKOUT, RegimeType.TREND, RegimeType.EARLY_TREND, RegimeType.TREND_UP, RegimeType.TREND_DOWN]
 
     def detect_setup(self, candles: List[Candle], regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> bool:
-        if len(candles) < 2: return False
+        if len(candles) < 4: return False
         
-        # HTF check: Better if HTF is not in a strong trend
-        if mtf_state and mtf_state.confluence_score > 0.8:
-             return False
+        # HTF Alignment
+        if mtf_state:
+             # Skip if FVG is counter to HTF bias
+             c1, c2, c3 = candles[-3], candles[-2], candles[-1]
+             if c1.high < c3.low and mtf_state.bias == "bearish": return False
+             if c1.low > c3.high and mtf_state.bias == "bullish": return False
 
-        last = candles[-1]
-        prev = candles[-2]
+        # FVG logic: 3 candle pattern
+        c1, c2, c3 = candles[-3], candles[-2], candles[-1]
         
-        gap = (last.open - prev.close) / (prev.close + 1e-9)
-        self.gap_val = gap
-        self.target_fill = prev.close
+        self.is_long = c1.high < c3.low
+        self.is_short = c1.low > c3.high
         
-        # Detect gap and rejection of gap direction
-        is_gap = abs(gap) >= self.min_gap_pct
-        
-        # We look for price moving BACK into the gap
-        if gap > 0: # Gap Up
-            self.is_short = last.close < last.open and last.close < last.high - (last.high - last.low) * 0.5
-            self.is_long = False
-        else: # Gap Down
-            self.is_long = last.close > last.open and last.close > last.low + (last.high - last.low) * 0.5
-            self.is_short = False
-            
-        return is_gap and (self.is_long or self.is_short)
+        return self.is_long or self.is_short
 
     def confirm_entry(self, candles: List[Candle]) -> bool:
-        # Cross back through the opening price
-        last = candles[-1]
-        if self.is_long:
-            return last.close > last.open
-        else:
-            return last.close < last.open
+        # Require relative volume > 1.2
+        features = TechnicalFeatureEngine.get_candle_features(candles)
+        return features["rel_vol"][-1] > 1.2
 
     def define_stop(self, candles: List[Candle]) -> float:
-        last = candles[-1]
-        # Stop at the high/low of the day
-        return last.high if self.is_short else last.low
+        # Stop at the other side of the FVG
+        c1 = candles[-3]
+        return c1.low if self.is_long else c1.high
 
     def define_target(self, candles: List[Candle]) -> float:
-        return self.target_fill
+        entry = candles[-1].close
+        stop = self.define_stop(candles)
+        risk = abs(entry - stop)
+        return entry + (3.0 * risk) if self.is_long else entry - (3.0 * risk)
 
     def score_setup(self, candles: List[Candle], regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> float:
-        score = 0.7
-        if mtf_state and mtf_state.bias == "neutral":
-            score = 0.85
+        score = 0.85
+        if mtf_state and mtf_state.confluence_score > 0.8:
+            score = 0.95
         return score
 
     def build_trade_idea(self, symbol: str, candles: List[Candle], regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> Optional[TradeIdea]:
         entry_price = candles[-1].close
         stop_loss = self.define_stop(candles)
         take_profit = self.define_target(candles)
-        
         rr = abs(take_profit - entry_price) / (abs(entry_price - stop_loss) + 1e-9)
-        if rr < 1.0: return None
-
+        
         return TradeIdea(
             symbol=symbol,
             asset_class=self.spec.asset_class,

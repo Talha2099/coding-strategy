@@ -4,60 +4,65 @@ from src.core.types.strategy import TradeIdea, RegimeType, StrategyFamily
 from src.core.types.trading import Candle, RegimeState, MTFRegimeState
 from src.features.technical_engine import TechnicalFeatureEngine
 from src.core.contracts.spec import InstrumentSpec
+import numpy as np
 
-class GapFill(BaseStrategy):
+class SRFade(BaseStrategy):
     """
-    Fades gaps that show exhaustion, targeting the previous close.
+    Fades major Support and Resistance levels in ranging markets.
     """
-    def __init__(self, spec: InstrumentSpec, min_gap_pct: float = 0.003):
-        super().__init__("GapFill", StrategyFamily.GAP, spec)
-        self.min_gap_pct = min_gap_pct
+    def __init__(self, spec: InstrumentSpec, window: int = 50):
+        super().__init__("SRFade", StrategyFamily.RANGE, spec)
+        self.window = window
 
     def is_valid_regime(self, regime: RegimeType) -> bool:
-        return regime in [RegimeType.GAP_DRIVEN, RegimeType.MEAN_REVERTING, RegimeType.LATE_TREND]
+        return regime in [RegimeType.RANGE, RegimeType.MEAN_REVERTING, RegimeType.VOLATILE_UNSTABLE]
 
     def detect_setup(self, candles: List[Candle], regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> bool:
-        if len(candles) < 2: return False
+        if len(candles) < self.window + 10: return False
         
-        # HTF check: Better if HTF is not in a strong trend
+        # HTF Trend check
         if mtf_state and mtf_state.confluence_score > 0.8:
-             return False
+            return False
 
-        last = candles[-1]
-        prev = candles[-2]
+        features = TechnicalFeatureEngine.get_candle_features(candles)
+        highs = features["high"]
+        lows = features["low"]
+        closes = features["close"]
         
-        gap = (last.open - prev.close) / (prev.close + 1e-9)
-        self.gap_val = gap
-        self.target_fill = prev.close
+        # Identify major S/R levels from previous data
+        self.resistance = np.max(highs[-self.window:-2])
+        self.support = np.min(lows[-self.window:-2])
         
-        # Detect gap and rejection of gap direction
-        is_gap = abs(gap) >= self.min_gap_pct
+        curr_price = closes[-1]
         
-        # We look for price moving BACK into the gap
-        if gap > 0: # Gap Up
-            self.is_short = last.close < last.open and last.close < last.high - (last.high - last.low) * 0.5
-            self.is_long = False
-        else: # Gap Down
-            self.is_long = last.close > last.open and last.close > last.low + (last.high - last.low) * 0.5
-            self.is_short = False
-            
-        return is_gap and (self.is_long or self.is_short)
+        self.is_short = curr_price >= self.resistance * 0.999
+        self.is_long = curr_price <= self.support * 1.001
+        
+        return self.is_long or self.is_short
 
     def confirm_entry(self, candles: List[Candle]) -> bool:
-        # Cross back through the opening price
+        # Rejection candle off the level
         last = candles[-1]
+        stats = TechnicalFeatureEngine.get_candle_stats(
+            np.array([last.high]), 
+            np.array([last.low]), 
+            np.array([last.open]), 
+            np.array([last.close])
+        )
         if self.is_long:
-            return last.close > last.open
+            return stats["lower_wick_pct"][0] > 0.3
         else:
-            return last.close < last.open
+            return stats["upper_wick_pct"][0] > 0.3
 
     def define_stop(self, candles: List[Candle]) -> float:
-        last = candles[-1]
-        # Stop at the high/low of the day
-        return last.high if self.is_short else last.low
+        features = TechnicalFeatureEngine.get_candle_features(candles)
+        atr = features["atr"][-1]
+        entry = candles[-1].close
+        return entry - (1.0 * atr) if self.is_long else entry + (1.0 * atr)
 
     def define_target(self, candles: List[Candle]) -> float:
-        return self.target_fill
+        # Target the opposite side of the range
+        return self.resistance if self.is_long else self.support
 
     def score_setup(self, candles: List[Candle], regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> float:
         score = 0.7
@@ -69,9 +74,9 @@ class GapFill(BaseStrategy):
         entry_price = candles[-1].close
         stop_loss = self.define_stop(candles)
         take_profit = self.define_target(candles)
-        
         rr = abs(take_profit - entry_price) / (abs(entry_price - stop_loss) + 1e-9)
-        if rr < 1.0: return None
+        
+        if rr < 1.2: return None
 
         return TradeIdea(
             symbol=symbol,
@@ -85,6 +90,6 @@ class GapFill(BaseStrategy):
             risk_reward_ratio=rr,
             confidence_score=self.score_setup(candles, regime_state, mtf_state),
             regime_tag=RegimeType(regime_state.regime_type),
-            holding_period_hint="intraday",
+            holding_period_hint="scalp",
             timestamp=candles[-1].ts
         )

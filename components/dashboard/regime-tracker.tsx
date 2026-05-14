@@ -25,7 +25,7 @@ export function RegimeTracker() {
     return () => clearInterval(interval);
   }, []);
 
-  const regimes = ['TRENDING_BULL', 'TRENDING_BEAR', 'RANGING', 'BREAKOUT'];
+  const regimes = ['TREND', 'RANGE', 'BREAKOUT', 'VOLATILE_UNSTABLE', 'LIQUIDITY_VOID'];
 
   return (
     <div className="bg-[#151619] rounded-2xl border border-[#2A2B2F] p-5 space-y-6">
@@ -44,12 +44,12 @@ export function RegimeTracker() {
               <span className={cn(data.prob[i] > 0.5 ? "text-[#00FF00]" : "text-[#8E9299]")}>
                 {name.replace('_', ' ')}
               </span>
-              <span className="text-white">{(data.prob[i] * 100).toFixed(1)}%</span>
+              <span className="text-white">{(data.prob[i] * 100 || 0).toFixed(1)}%</span>
             </div>
             <div className="h-1 bg-black/40 rounded-full overflow-hidden border border-[#2A2B2F]">
               <motion.div 
                 initial={false}
-                animate={{ width: `${data.prob[i] * 100}%` }}
+                animate={{ width: `${(data.prob[i] || 0) * 100}%` }}
                 className={cn(
                   "h-full transition-colors",
                   data.prob[i] > 0.5 ? "bg-[#00FF00]" : "bg-[#8E9299]/30"

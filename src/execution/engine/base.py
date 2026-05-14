@@ -7,13 +7,15 @@ from src.core.math_engine.finance_models import ExpectancyCalculator
 from src.core.math_engine.stochastic_calculus import MicrostructureSDE
 from src.core.contracts.spec import InstrumentSpec, SessionType, AssetClass
 
+from src.core.types.strategy import RegimeType
+
 class ExecutionEngine:
     def __init__(self, specs: Dict[str, InstrumentSpec], commission_per_lot: float = 5.0):
         self.specs = specs
         self.commission_per_lot = commission_per_lot
         self.sde_model = MicrostructureSDE(theta=0.5, mu=0.0001, sigma=0.0001)
 
-    def get_realtime_spread(self, symbol: str, session: SessionType) -> float:
+    def get_realtime_spread(self, symbol: str, session: SessionType, regime: Optional[RegimeType] = None) -> float:
         spec = self.specs.get(symbol)
         if not spec: return 0.0001
         
@@ -26,60 +28,69 @@ class ExecutionEngine:
             SessionType.OVERLAP_LN_NY: 0.8,
             SessionType.CLOSE: 5.0
         }
-        return base * multipliers.get(session, 1.0)
-
-    def decide_order_type(self, trade: ScoredTrade, session: SessionType) -> Literal["market", "limit"]:
-        """
-        Microstructure-aware decision: use limit if spread/ofi is favorable, else market.
-        Uses Expectancy criteria and Session awareness.
-        """
-        spec = self.specs.get(trade.symbol)
-        ofi = trade.features.get("ofi", 0.0)
-        spread = self.get_realtime_spread(trade.symbol, session)
         
-        # Calculate expectancy of current trade
-        edge = ExpectancyCalculator.calculate(trade.probability, 2.0)
-        
-        # Avoid market orders in illiquid sessions
-        if session == SessionType.CLOSE or (spec and spread > spec.spread_base * 3):
-            return "limit"
-
-        if edge < 0.05:
-            return "market" if ofi > 0.8 else "limit"
-
-        if abs(ofi) > 0.7:
-            return "market"
+        regime_mult = 1.0
+        if regime:
+            from src.core.types.strategy import RegimeType
+            if regime == RegimeType.VOLATILE_UNSTABLE: regime_mult = 3.0
+            elif regime == RegimeType.TREND_IGNITION: regime_mult = 1.8
+            elif regime == RegimeType.BREAKOUT: regime_mult = 1.5
             
-        if spread > 0.0002:
-            return "limit"
-            
-        return "market"
+        return base * multipliers.get(session, 1.0) * regime_mult
 
-    def estimate_slippage(self, order: ExecutionOrder, current_vol: float = 0.0001) -> float:
-        """
-        Volatility-scaled slippage model using SDE simulation logic.
-        """
+    def estimate_slippage(self, order: ExecutionOrder, current_vol: float = 0.0001, regime: Optional[RegimeType] = None) -> float:
         spec = self.specs.get(order.symbol)
         base_spread = spec.spread_base if spec else 0.0001
         
-        # Model spread mean-reversion
         simulated_spreads = self.sde_model.simulate_path(base_spread, dt=1/60, steps=10)
         expected_spread = float(np.mean(simulated_spreads))
         
-        # Scale by volatility (Fast markets increase slippage)
         vol_scaler = 1.0 + (current_vol * 1000)
+        regime_scaler = 1.0
+        if regime:
+            from src.core.types.strategy import RegimeType
+            if regime in [RegimeType.VOLATILE_UNSTABLE, RegimeType.GAP_DRIVEN]:
+                regime_scaler = 2.0
+            elif regime == RegimeType.TREND_IGNITION:
+                regime_scaler = 1.6
         
-        return expected_spread * 0.5 * vol_scaler
+        # Limit orders usually have 0 slippage if executed exactly at price (or better)
+        # Market orders and Stops (which become market) have slippage
+        if order.type == "limit":
+             return 0.0
+             
+        return expected_spread * 0.5 * vol_scaler * regime_scaler
 
-    def execute(self, order: ExecutionOrder, session: SessionType, vol: float = 0.0001) -> FillResult:
+    def execute_at_tick(self, order: ExecutionOrder, tick_price: float, session: SessionType, vol: float = 0.0001, regime: Optional[RegimeType] = None) -> Optional[FillResult]:
         """
-        Simulates execution with session and volatility context.
-        Includes session-based liquidity scaling and partial fills.
+        Executes order logic against a specific price tick.
         """
-        slippage = self.estimate_slippage(order, vol)
-        fill_price = order.price + slippage if order.side == "buy" else order.price - slippage
+        # Determine if order triggers or executes
+        can_execute = False
+        execution_price = tick_price
         
-        # Session-based Liquidity / Fill Probability
+        if order.type == "market":
+            can_execute = True
+        elif order.type == "limit":
+            if order.side == "buy" and tick_price <= order.price:
+                can_execute = True
+                execution_price = order.price # Fill at limit or better (simulating limit)
+            elif order.side == "sell" and tick_price >= order.price:
+                can_execute = True
+                execution_price = order.price
+        elif order.type == "stop":
+            if order.side == "buy" and tick_price >= order.price:
+                can_execute = True
+            elif order.side == "sell" and tick_price <= order.price:
+                can_execute = True
+                
+        if not can_execute:
+            return None
+            
+        slippage = self.estimate_slippage(order, vol, regime)
+        fill_price = execution_price + slippage if order.side == "buy" else execution_price - slippage
+        
+        # Determine fill size based on session liquidity
         liquidity_map = {
             SessionType.ASIA: 0.8,
             SessionType.LONDON: 1.0,
@@ -89,12 +100,11 @@ class ExecutionEngine:
         }
         fill_prob = liquidity_map.get(session, 1.0)
         
-        # Determine actual fill size (partial fills in thin markets)
         fill_size = order.size
-        if vol > 0.005 or fill_prob < 1.0:
-            actual_fill_ratio = float(np.random.uniform(max(0.05, fill_prob - 0.4), 1.0))
-            fill_size = order.size * actual_fill_ratio
-            
+        if fill_prob < 1.0:
+            actual_ratio = float(np.random.uniform(fill_prob * 0.5, 1.0))
+            fill_size = order.size * actual_ratio
+
         return FillResult(
             order_id=order.id,
             fill_price=fill_price,

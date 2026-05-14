@@ -1,6 +1,6 @@
 {
-  "name": "TraderSuit Autonomous Dashboard",
-  "description": "A high-performance trading strategy visualization dashboard featuring market structure analysis, liquidity detection, and ML-driven backtesting results.",
+  "name": "Cortex Institutional Quant Platform",
+  "description": "Multi-regime autonomous trading laboratory with deterministic logic and ML filters.",
   "requestFramePermissions": [],
   "majorCapabilities": []
 }

@@ -1,85 +1,105 @@
-from typing import List, Optional
+from typing import List, Optional, Dict
 from src.strategies.base import BaseStrategy
 from src.core.types.strategy import TradeIdea, RegimeType, StrategyFamily
 from src.core.types.trading import Candle, RegimeState, MTFRegimeState
 from src.features.technical_engine import TechnicalFeatureEngine
 from src.core.contracts.spec import InstrumentSpec
+import numpy as np
 
-class EMAPullback(BaseStrategy):
+class FibPullback(BaseStrategy):
     """
-    Classic trend continuation pullback to the 20 EMA.
-    Uses trend slope and candle confirmation for entry.
+    Trades pullbacks to Fibonacci retracement levels (0.5, 0.618) in strong trends.
     """
-    def __init__(self, spec: InstrumentSpec, ema_window: int = 20):
-        super().__init__("EMAPullback", StrategyFamily.PULLBACK, spec)
-        self.ema_window = ema_window
+    def __init__(self, spec: InstrumentSpec, lookback: int = 50):
+        super().__init__("FibPullback", StrategyFamily.PULLBACK, spec)
+        self.lookback = lookback
 
     def is_valid_regime(self, regime: RegimeType) -> bool:
-        return regime in [RegimeType.MID_TREND, RegimeType.PULLBACK_IN_TREND, RegimeType.TREND_UP, RegimeType.TREND_DOWN]
+        return regime in [RegimeType.TREND, RegimeType.PULLBACK_CONTINUATION, RegimeType.MID_TREND, RegimeType.PULLBACK_IN_TREND, RegimeType.TREND_UP, RegimeType.TREND_DOWN]
 
     def detect_setup(self, candles: List[Candle], regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> bool:
-        if len(candles) < self.ema_window + 10: return False
+        if len(candles) < self.lookback: return False
         
         features = TechnicalFeatureEngine.get_candle_features(candles)
+        highs = features["high"]
+        lows = features["low"]
         closes = features["close"]
-        ema = features[f"ema_{self.ema_window}"]
+        sma_50 = features["sma_50"]
         
-        curr_price = closes[-1]
-        sma_20_slope = features["sma_20_slope"][-1]
+        # Determine trend
+        direction = "long" if closes[-1] > sma_50[-1] else "short"
         
         # HTF Alignment
         if mtf_state:
-            direction = "long" if sma_20_slope > 0 else "short"
             if direction == "long" and mtf_state.bias != "bullish": return False
             if direction == "short" and mtf_state.bias != "bearish": return False
 
-        self.is_long = sma_20_slope > 0 and curr_price > ema[-1]
-        self.is_short = sma_20_slope < 0 and curr_price < ema[-1]
+        self.is_long = direction == "long"
+        self.is_short = direction == "short"
         
-        # Pullback: Price is near the EMA
-        dist_ema = abs(curr_price - ema[-1]) / (ema[-1] + 1e-9)
-        return (self.is_long or self.is_short) and dist_ema < 0.002
+        # Find the recent swing high/low in this lookback
+        swing_high = np.max(highs[-self.lookback:])
+        swing_low = np.min(lows[-self.lookback:])
+        swing_range = swing_high - swing_low
+        
+        if swing_range == 0: return False
+        
+        self.fib_618 = 0.0
+        self.fib_50 = 0.0
+        
+        if self.is_long:
+            # Bullish trend: pullback to Fib levels
+            self.fib_618 = swing_high - (swing_range * 0.618)
+            self.fib_50 = swing_high - (swing_range * 0.5)
+            # Check if current LOW is near these levels
+            curr_low = candles[-1].low
+            return curr_low <= self.fib_50 and curr_low >= self.fib_618 * 0.995
+        else:
+            # Bearish trend
+            self.fib_618 = swing_low + (swing_range * 0.618)
+            self.fib_50 = swing_low + (swing_range * 0.5)
+            curr_high = candles[-1].high
+            return curr_high >= self.fib_50 and curr_high <= self.fib_618 * 1.005
 
     def confirm_entry(self, candles: List[Candle]) -> bool:
-        # Candle must close in the direction of the trend after touching EMA
         last = candles[-1]
+        # Reversal candle off the fib zone
         if self.is_long:
             return last.close > last.open
         else:
             return last.close < last.open
 
     def define_stop(self, candles: List[Candle]) -> float:
+        # Stop below the 78.6% retracement or recent swing
         features = TechnicalFeatureEngine.get_candle_features(candles)
         atr = features["atr"][-1]
         entry = candles[-1].close
         return entry - (1.5 * atr) if self.is_long else entry + (1.5 * atr)
 
     def define_target(self, candles: List[Candle]) -> float:
+        # Target the swing high/low
         features = TechnicalFeatureEngine.get_candle_features(candles)
-        atr = features["atr"][-1]
-        entry = candles[-1].close
-        return entry + (3.0 * atr) if self.is_long else entry - (3.0 * atr)
+        highs = features["high"]
+        lows = features["low"]
+        if self.is_long:
+            return np.max(highs[-self.lookback:])
+        else:
+            return np.min(lows[-self.lookback:])
 
     def score_setup(self, candles: List[Candle], regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> float:
-        features = TechnicalFeatureEngine.get_candle_features(candles)
-        # Higher score if the trend is strong (ADX > 25)
-        adx = features["adx"][-1]
-        score = min(1.0, adx / 50.0)
-        
-        # Confluence bonus
+        score = 0.75
         if mtf_state and mtf_state.confluence_score > 0.8:
-            score = min(1.0, score + 0.1)
-            
+            score = 0.85
         return score
 
     def build_trade_idea(self, symbol: str, candles: List[Candle], regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> Optional[TradeIdea]:
         entry_price = candles[-1].close
         stop_loss = self.define_stop(candles)
         take_profit = self.define_target(candles)
-        
         rr = abs(take_profit - entry_price) / (abs(entry_price - stop_loss) + 1e-9)
-        if rr < 1.1: return None
-
+        
+        if rr < 1.3: return None
+ 
         return TradeIdea(
             symbol=symbol,
             asset_class=self.spec.asset_class,
@@ -92,6 +112,6 @@ class EMAPullback(BaseStrategy):
             risk_reward_ratio=rr,
             confidence_score=self.score_setup(candles, regime_state, mtf_state),
             regime_tag=RegimeType(regime_state.regime_type),
-            holding_period_hint="intraday",
+            holding_period_hint="swing",
             timestamp=candles[-1].ts
         )

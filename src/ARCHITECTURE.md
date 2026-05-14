@@ -1,19 +1,31 @@
-# TraderSuit Autonomous Quant Platform
+# Cortex Institutional Quant Platform
 
-Research-grade, microstructure-aware trading system based on Smart Money Concepts (SMC).
+Research-grade, regime-aware autonomous trading laboratory.
 
 ## Core Architecture
 
-The system is designed as a pipeline with strict data contracts:
+The system is designed as a deterministic-first pipeline with ML-based probability filters:
 
-1.  **Deterministic SMC Layer** (`src/scenarios/`): Generates trade candidates based on market structure and supply/demand zones.
-2.  **Market Microstructure Layer** (`src/market_microstructure/`): Computes features from order book snapshots and tick data (spread, OFI, depth imbalance).
-3.  **Statistical Feature Fusion** (`src/features/fusion/`): Combines SMC signals with microstructure and regime measurements.
-4.  **Meta-Model Filtering** (`src/ml/meta_labeling/`): Scores candidates to estimate the probability of success.
-5.  **Risk Gating** (`src/risk/`): Validates approved trades against portfolio constraints and determines position sizing.
-6.  **Microstructure-Aware Execution** (`src/execution/`): Optimizes order type (market vs limit) and routes to brokers.
-7.  **Bayesian Hyperparameter Optimization** (`src/research/optimization/`): Uses TPE/Bayesian techniques to find optimal strategy and risk parameters.
-8.  **Event-Driven Backtest** (`src/backtest/`): Simulates the full pipeline under realistic conditions (slippage, spread, fills).
+1.  **Regime & Lifecycle Detection** (`src/regime/`): Classifies market state into Pre-trend, Ignition, Stable Trend, Exhaustion, or Range.
+2.  **Deterministic Strategy Family** (`src/strategies/`): specialized logic for Trend Following, Breakout, Pullback, and Mean Reversion.
+3.  **Technical Feature Engine** (`src/features/`): Robust, causal technical indicator layer (Hurst, ADX, SMA Slopes).
+4.  **Meta-Model Filtering** (`src/ml/meta_labeling/`): Scores trade ideas using secondary feature sets.
+5.  **Multi-Asset Risk Engine** (`src/risk/`): Kelly-Criterion sizing scaled by regime stability and asset profile.
+6.  **Optimized Execution** (`src/execution/`): Session-aware slippage modeling and RL-optimized entry/exit timing.
+7.  **Event-Driven Backtest** (`src/backtest/`): High-fidelity simulation with structured attribution logs.
+
+## Trend Lifecycle & Health System
+
+The platform implements a continuous trend monitoring system that models trends as biological lifecycles:
+
+-   **Lifecycle Stages (0-7)**: From non-trending (0) to ignition (1/2), stable expansion (3/4), overextension (5/6), and reversal risk (7).
+-   **Trend Health Engine**: Evaluates slope persistence, retracement quality, and volatility stability.
+-   **Late-Trend Protection**: Deterministically blocks new entries when trend maturity or exhaustion risk exceeds defined thresholds.
+-   **Persistence Estimation**: Utilizes Hurst Exponent and Kalman filters to differentiate between sustainable trends and noisy rallies.
+
+## Pipeline Flow
+
+`Market Data` → `Regime Classification` → `Strategy Signals` → `Meta-Model (ML Filter)` → `Risk Gating` → `Execution Timing` → `Post-Trade Attribution`
 
 ## Key Data Contracts
 

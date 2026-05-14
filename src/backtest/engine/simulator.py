@@ -1,6 +1,6 @@
 import numpy as np
 import uuid
-from typing import List, Dict
+from typing import List, Dict, Optional
 from datetime import datetime
 from src.core.types.trading import (
     Candle, Tick, OrderBookSnapshot, 
@@ -15,8 +15,13 @@ from src.core.contracts.spec import ContractManager, SessionType
 from src.indicators.trend_filter import TrendModule
 from src.core.types.strategy import TradeIdea, RegimeType, StrategyFamily
 from src.regime.engine import RegimeEngine
+from src.regime.mtf_engine import MTFRegimeEngine
 from src.strategies.registry import StrategyRouter
 from src.core.analytics.reporting import PerformanceReporter
+from src.portfolio.manager import PortfolioManager
+from src.rl.agents.execution import ExecutionAgent
+from src.core.utils.logger import system_logger
+from src.backtest.engine.micro_validator import MicrostructureValidator
 
 class EventDrivenBacktester:
     def __init__(self, 
@@ -24,14 +29,24 @@ class EventDrivenBacktester:
                  risk_engine: MultiAssetRiskEngine,
                  exec_engine: ExecutionEngine,
                  regime_engine: RegimeEngine,
+                 mtf_engine: MTFRegimeEngine,
                  strategy_router: StrategyRouter,
-                 crash_module: CrashProtectionModule):
+                 crash_module: CrashProtectionModule,
+                 portfolio_manager: Optional[PortfolioManager] = None,
+                 execution_agent: Optional[ExecutionAgent] = None,
+                 meta_model: Optional[MetaModel] = None,
+                 micro_validator: Optional[MicrostructureValidator] = None):
         self.contract_manager = contract_manager
         self.risk_engine = risk_engine
         self.exec_engine = exec_engine
         self.regime_engine = regime_engine
+        self.mtf_engine = mtf_engine
         self.strategy_router = strategy_router
         self.crash_module = crash_module
+        self.portfolio_manager = portfolio_manager
+        self.execution_agent = execution_agent
+        self.meta_model = meta_model
+        self.micro_validator = micro_validator or MicrostructureValidator()
         
         self.history = []
         self.equity_curve = [100000.0]
@@ -41,9 +56,11 @@ class EventDrivenBacktester:
         self.candle_history: Dict[str, List[Candle]] = {}
         self.last_ts: Dict[str, datetime] = {}
         
-        # Strategy Tracking
-        self.strategy_pnl: Dict[str, float] = {} # Strategy Name -> PnL
-        self.family_pnl: Dict[StrategyFamily, float] = {sf: 0.0 for sf in StrategyFamily}
+        # Attribution Tracking
+        self.strategy_pnl: Dict[str, float] = {} 
+        self.regime_pnl: Dict[RegimeType, float] = {rt: 0.0 for rt in RegimeType}
+        self.asset_pnl: Dict[str, float] = {}
+        self.session_pnl: Dict[SessionType, float] = {st: 0.0 for st in SessionType}
         
         self.pnl_stats = {
             "gross_pnl": 0.0,
@@ -76,18 +93,52 @@ class EventDrivenBacktester:
         spec = self.contract_manager.get_spec(symbol)
         session = self.contract_manager.get_session(tick.ts)
         
-        # 1. Check Exits
-        self._check_exits(tick)
+        # 1. Active Trade Management (RL Agent)
+        if self.execution_agent:
+            self._manage_active_trades(tick)
 
-        # 2. Regime Analysis
-        regime = self.regime_engine.classify(self.candle_history[symbol]) if len(self.candle_history[symbol]) >= 20 else RegimeType.VOLATILE_UNSTABLE
+        # 3. Regime Analysis
+        if len(self.candle_history[symbol]) >= 50:
+            regime_state = self.regime_engine.classify(self.candle_history[symbol], symbol)
+            regime = RegimeType(regime_state.regime_type)
+            
+            # MTF Regime Analysis
+            # For backtest, we might not have actual separate timeframes ready, 
+            # so we'll simulate them using the same history (simplified)
+            # In a real setup, we'd use resampled candles for MTF/HTF.
+            mtf_state = self.mtf_engine.analyze(
+                ltf_candles=self.candle_history[symbol],
+                mtf_candles=self.candle_history[symbol], # Should be resampled
+                htf_candles=self.candle_history[symbol]  # Should be resampled
+            )
+        else:
+            regime_state = self.regime_engine._default_state(symbol)
+            regime = RegimeType.VOLATILE_UNSTABLE # Initial state
+            mtf_state = None
         
-        # 3. Strategy Scan
-        ideas = self.strategy_router.get_trade_ideas(symbol, self.candle_history[symbol], regime)
-        for idea in ideas:
-            self.process_trade_idea(idea, tick.ts)
+        # 2. Check Static Exits (SL/TP) - Moved after regime calculation
+        self._check_exits(tick, regime)
+
+        if self.history and self.history[-1].get("regime") != regime:
+            system_logger.log_event("REGIME_CHANGE", {
+                "symbol": symbol,
+                "old_regime": str(self.history[-1].get("regime")),
+                "new_regime": regime.name,
+                "ts": tick.ts.isoformat()
+            })
+
+        # 4. Strategy Scan & Portfolio Orchestration
+        ideas = self.strategy_router.get_trade_ideas(symbol, self.candle_history[symbol], regime_state, mtf_state)
         
-        # 4. Financing & Corporate Actions Check (at 22:00 UTC)
+        if self.portfolio_manager:
+            optimized_ideas = self.portfolio_manager.process_ideas(ideas, self.equity_curve[-1], regime)
+        else:
+            optimized_ideas = ideas
+        
+        for idea in optimized_ideas:
+            self.process_trade_idea(idea, tick.ts, regime)
+        
+        # 5. Financing & Corporate Actions Check (at 22:00 UTC)
         if tick.ts.hour == 22 and tick.ts.minute == 0:
             self._apply_financing(symbol, tick.ts)
             self._apply_corporate_actions(symbol, tick.ts)
@@ -98,6 +149,14 @@ class EventDrivenBacktester:
             "regime": regime,
             "price": tick.price
         })
+
+    def _manage_active_trades(self, tick: Tick):
+        """Delegates active management to the Execution Agent."""
+        for pos in self.open_positions:
+            if pos.symbol == tick.symbol:
+                action = self.execution_agent.manage_position(pos, self.candle_history[tick.symbol])
+                if action == "CLOSE":
+                    self._close_position(pos, tick.price, tick.ts, "RL_EXIT")
 
     def _update_candles(self, tick: Tick):
         """Builds 1-min candles from ticks."""
@@ -120,7 +179,7 @@ class EventDrivenBacktester:
             )
             self.candle_history[symbol][-1] = updated_candle
 
-    def process_trade_idea(self, idea: TradeIdea, dt: datetime):
+    def process_trade_idea(self, idea: TradeIdea, dt: datetime, regime: RegimeType):
         symbol = idea.symbol
         spec = self.contract_manager.get_spec(symbol)
         session = self.contract_manager.get_session(dt)
@@ -129,30 +188,56 @@ class EventDrivenBacktester:
         vol = (self.price_history[symbol][-1] * 0.001) if len(self.price_history[symbol]) > 0 else 0.0001
         crash_status = self.crash_module.should_block(symbol, vol, np.eye(1))
         if crash_status["block"]:
+            system_logger.log_event("SETUP_REJECTION", {"reason": "CRASH_DEFENSE", "symbol": symbol, "ts": dt.isoformat()})
             return "REJECTED_CRASH_DEFENSE"
 
-        # 2. Risk & Sizing
+        # 2. Risk & Sizing (Now Kelly-aware)
         # We need a stop distance for sizing
         stop_dist = abs(idea.entry_price - idea.stop_loss)
         if stop_dist == 0: return "REJECTED_ZERO_STOP"
         
-        size = self.risk_engine.get_position_sizing(symbol, vol, self.equity_curve[-1], stop_dist)
+        size = self.risk_engine.get_position_sizing(
+            symbol, vol, self.equity_curve[-1], stop_dist, regime,
+            confidence_score=idea.confidence_score,
+            rr=idea.risk_reward_ratio
+        )
         
-        valid, msg = self.risk_engine.validate_trade(idea, size, self.equity_curve[-1])
-        if not valid: return f"REJECTED_RISK_{msg}"
+        valid, msg = self.risk_engine.validate_trade(idea, size, self.equity_curve[-1], spec.spread_base)
+        if not valid: 
+            system_logger.log_event("RISK_REJECTION", {"reason": msg, "symbol": symbol, "ts": dt.isoformat()})
+            return f"REJECTED_RISK_{msg}"
         
-        # 3. Execution
+        # 2.5 Microstructure Validation (Optional)
+        micro_conf = self.micro_validator.validate_idea(idea, None) # In live we would pass actual MicroFeatures
+        if not micro_conf["valid"]:
+            system_logger.log_event("MICRO_REJECTION", {"reason": micro_conf["reason"], "symbol": symbol, "ts": dt.isoformat()})
+            return f"REJECTED_MICRO_{micro_conf['reason']}"
+
+        # 3. Execution (Optimized by RL Agent)
+        entry_price = idea.entry_price
+        if self.execution_agent:
+            entry_price = self.execution_agent.optimize_entry(idea.entry_price, idea.entry_price)
+        
         order = ExecutionOrder(
             id=uuid.uuid4().hex, 
             symbol=symbol, 
             side="buy" if idea.direction == "long" else "sell", 
-            price=idea.entry_price, 
+            price=entry_price, 
             size=size, 
             type="market",
             timestamp=dt
         )
-        fill = self.exec_engine.execute(order, session, vol)
+        fill = self.exec_engine.execute(order, session, vol, regime=regime)
         
+        system_logger.log_event("ORDER_FILLED", {
+            "symbol": symbol,
+            "side": order.side,
+            "price": fill.fill_price,
+            "size": fill.fill_size,
+            "strategy": idea.strategy_name,
+            "regime": regime.name
+        })
+
         # Update Stats
         self.pnl_stats["commissions"] += fill.commission
         self.pnl_stats["slippage_total"] += fill.slippage * abs(fill.fill_size) * spec.contract_size * spec.point_value
@@ -160,22 +245,31 @@ class EventDrivenBacktester:
 
         pos_size = size if idea.direction == "long" else -size
         new_pos = Position(
+            id=idea.strategy_name,
             symbol=symbol,
+            asset_class=spec.asset_class.name,
             size=pos_size,
             entry_price=fill.fill_price,
+            avg_price=fill.fill_price,
             stop_loss=idea.stop_loss,
             take_profit=idea.take_profit,
             entry_ts=dt,
-            id=idea.strategy_name # Link to strategy for attribution
+            strategy_name=idea.strategy_name,
+            regime_at_entry=regime,
+            session_at_entry=session,
+            metadata={
+                "trend_stage": regime_state.lifecycle_stage,
+                "health": regime_state.health_score,
+                "slippage": fill.slippage * abs(fill.fill_size) * spec.contract_size * spec.point_value
+            }
         )
         self.open_positions.append(new_pos)
         self.current_positions[symbol] = self.current_positions.get(symbol, 0.0) + pos_size
         self.equity_curve.append(self.equity_curve[-1] - fill.commission)
         
-        # Strategy Attribution: record that a position was opened
         return "EXECUTED"
 
-    def _check_exits(self, tick: Tick):
+    def _check_exits(self, tick: Tick, current_regime: RegimeType):
         still_open = []
         for pos in self.open_positions:
             if pos.symbol != tick.symbol:
@@ -186,7 +280,7 @@ class EventDrivenBacktester:
             hit_sl = (pos.size > 0 and tick.price <= pos.stop_loss) or (pos.size < 0 and tick.price >= pos.stop_loss)
             
             if hit_tp or hit_sl:
-                self._close_position(pos, tick.price, tick.ts, "TP" if hit_tp else "SL")
+                self._close_position(pos, tick.price, tick.ts, "TP" if hit_tp else "SL", current_regime)
             else:
                 still_open.append(pos)
         self.open_positions = still_open
@@ -225,10 +319,11 @@ class EventDrivenBacktester:
         self.equity_curve.append(self.equity_curve[-1] - cost)
         self.pnl_stats["financing_costs"] += cost
 
-    def _close_position(self, pos: Position, exit_price: float, ts: datetime, reason: str):
+    def _close_position(self, pos: Position, exit_price: float, ts: datetime, reason: str, current_regime: Optional[RegimeType] = None):
         spec = self.contract_manager.get_spec(pos.symbol)
         session = self.contract_manager.get_session(ts)
         vol = (self.price_history[pos.symbol][-1] * 0.001) if len(self.price_history[pos.symbol]) > 0 else 0.0001
+        regime = current_regime or pos.regime_at_entry # Fallback to entry regime if current is unknown
         
         # 1. Execution for exit
         side = "sell" if pos.size > 0 else "buy"
@@ -243,15 +338,27 @@ class EventDrivenBacktester:
             size=abs(pos.size),
             timestamp=ts
         )
-        fill = self.exec_engine.execute(order, session, vol)
+        fill = self.exec_engine.execute(order, session, vol, regime=regime)
         
         # 2. Realistic PnL Calculation
         raw_pnl = (fill.fill_price - pos.entry_price) * pos.size * spec.contract_size * spec.point_value
         
-        # Strategy Attribution
+        # Attribution
         strat_name = pos.id
         self.strategy_pnl[strat_name] = self.strategy_pnl.get(strat_name, 0.0) + raw_pnl
+        self.regime_pnl[pos.regime_at_entry] += raw_pnl
+        self.asset_pnl[pos.asset_class] = self.asset_pnl.get(pos.asset_class, 0.0) + raw_pnl
+        self.session_pnl[pos.session_at_entry] += raw_pnl
         
+        system_logger.log_event("TRADE_CLOSED", {
+            "symbol": pos.symbol,
+            "reason": reason,
+            "pnl": raw_pnl,
+            "strategy": strat_name,
+            "regime": pos.regime_at_entry.name,
+            "ts": ts.isoformat()
+        })
+
         # Update Stats
         self.pnl_stats["gross_pnl"] += raw_pnl
         self.pnl_stats["net_pnl"] += (raw_pnl - fill.commission)
@@ -267,7 +374,13 @@ class EventDrivenBacktester:
             "symbol": pos.symbol,
             "pnl": raw_pnl,
             "ts": ts,
-            "strategy": strat_name
+            "strategy": strat_name,
+            "regime": pos.regime_at_entry,
+            "session": pos.session_at_entry,
+            "asset_class": pos.asset_class,
+            "trend_stage": pos.metadata.get("trend_stage"),
+            "health": pos.metadata.get("health"),
+            "slippage": pos.metadata.get("slippage", 0.0)
         })
 
     def run(self, ticks: List[Tick]):

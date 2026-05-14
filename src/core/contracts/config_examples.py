@@ -15,7 +15,10 @@ GOLD_XAUUSD = InstrumentSpec(
     spread_base=0.15, # 15 pips average
     swap_long=-8.5, # Daily cost per lot
     swap_short=2.1,
-    trading_hours={"mon-fri": ["00:01-23:59"]}
+    trading_hours={"mon-fri": ["00:01-23:59"]},
+    macro_session_sensitivity=True,
+    vol_expansion_sensitivity=True,
+    stop_widening_factor=1.5,
 )
 
 US500_CASH = InstrumentSpec(
@@ -33,7 +36,9 @@ US500_CASH = InstrumentSpec(
     spread_base=0.5,
     swap_long=-2.4,
     swap_short=-1.1,
-    trading_hours={"mon-fri": ["00:01-23:59"]}
+    trading_hours={"mon-fri": ["00:01-23:59"]},
+    opening_range_focus=True,
+    gap_priority="continuation",
 )
 
 AAPL_STOCK = InstrumentSpec(
@@ -53,5 +58,8 @@ AAPL_STOCK = InstrumentSpec(
     swap_short=0.0,
     allow_overnight=True,
     allow_short=True,
-    trading_hours={"mon-fri": ["14:30-21:00"]} # US Eastern in UTC (approx)
+    trading_hours={"mon-fri": ["14:30-21:00"]}, # US Eastern in UTC (approx)
+    earnings_aware=True,
+    auction_aware=True,
+    gap_priority="fill",
 )

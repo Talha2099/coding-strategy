@@ -7,19 +7,32 @@ from src.core.types.trading import (
 from src.market_microstructure.engine import MicrostructureEngine
 from src.features.fusion.engine import FeatureFusionEngine
 from src.ml.meta_labeling.model import MetaModel
-from src.risk.engine import RiskEngine
-from src.execution.engine.base import ExecutionEngine
+from src.core.contracts.spec import ContractManager
+from src.risk.asset_aware_risk import MultiAssetRiskEngine, CrashProtectionModule
+from src.regime.engine import RegimeEngine
+from src.regime.mtf_engine import MTFRegimeEngine
+from src.strategies.registry import StrategyRouter
 from src.backtest.engine.simulator import EventDrivenBacktester
 
 def test_full_pipeline_flow():
     # 1. Setup components
-    micro = MicrostructureEngine()
-    fusion = FeatureFusionEngine()
-    meta = MetaModel()
-    risk = RiskEngine()
+    cm = ContractManager()
+    risk = MultiAssetRiskEngine({})
     exec_eng = ExecutionEngine()
+    regime_eng = RegimeEngine()
+    mtf_eng = MTFRegimeEngine()
+    router = StrategyRouter(cm)
+    crash = CrashProtectionModule()
     
-    backtester = EventDrivenBacktester(micro, fusion, meta, risk, exec_eng)
+    backtester = EventDrivenBacktester(
+        contract_manager=cm,
+        risk_engine=risk,
+        exec_engine=exec_eng,
+        regime_engine=regime_eng,
+        mtf_engine=mtf_eng,
+        strategy_router=router,
+        crash_module=crash
+    )
     
     # 2. Simulate events
     # Market state
@@ -55,13 +68,23 @@ def test_full_pipeline_flow():
     assert history_entry["fill"].fill_price > 0
 
 def test_full_pipeline_risk_rejection():
-    micro = MicrostructureEngine()
-    fusion = FeatureFusionEngine()
-    meta = MetaModel()
-    risk = RiskEngine(min_prob_threshold=0.9) # High threshold
+    cm = ContractManager()
+    risk = MultiAssetRiskEngine({}) 
     exec_eng = ExecutionEngine()
+    regime_eng = RegimeEngine()
+    mtf_eng = MTFRegimeEngine()
+    router = StrategyRouter(cm)
+    crash = CrashProtectionModule()
     
-    backtester = EventDrivenBacktester(micro, fusion, meta, risk, exec_eng)
+    backtester = EventDrivenBacktester(
+        contract_manager=cm,
+        risk_engine=risk,
+        exec_engine=exec_eng,
+        regime_engine=regime_eng,
+        mtf_engine=mtf_eng,
+        strategy_router=router,
+        crash_module=crash
+    )
     
     # Dummy candidate
     candidate = TradeCandidate("c2", "BTC", "long", 100, 90, 110, "test", datetime.now())
