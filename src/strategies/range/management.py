@@ -12,21 +12,45 @@ class RangeManagementEngine:
         pass
 
     def evaluate(self, candles: List[Candle], idea: TradeIdea, regime_state: RegimeState) -> Optional[Dict[str, Any]]:
+        from src.core.contracts.instrument_registry import InstrumentRegistry
+        spec = InstrumentRegistry.get_spec(idea.symbol)
+        
         features = TechnicalFeatureEngine.get_candle_features(candles)
         last_price = candles[-1].close
         direction = 1 if idea.direction == "long" else -1
         
         updates = {}
         
-        # 1. RANGE BREAKOUT EXIT (Failure)
-        # If price closes outside the opposite edge of the range with expansion
+        # 0. INSTRUMENT-SPECIFIC FAILURE MODES
+        behavior = spec.behavior
+        if "fake_breakout" in behavior.failure_modes:
+            # If we see a strong push above/below edge then immediate reclaim
+            if (direction == 1 and features["high"][-1] > features["bb_upper"][-1] and last_price < features["bb_upper"][-1]):
+                 # We were long, but it looks like a fake breakout above - exit with caution
+                 return {"exit": True, "exit_reason": f"instrument_failure_mode_fake_breakout", "lifecycle_phase": StrategyPhase.EXIT}
+
+        # 1. RANGE BREAKOUT EXIT (Failure) & AUCTION ACCEPTANCE
+        # 1a. Hard Breakout
         is_breakout_adverse = (direction == 1 and last_price < features["bb_lower"][-1]) or \
                               (direction == -1 and last_price > features["bb_upper"][-1])
         
-        if is_breakout_adverse and features["bb_expansion"][-1] > 0.02:
-            return {"exit": True, "exit_reason": "range_breakout_confirmed", "lifecycle_phase": StrategyPhase.FAILURE}
+        # 1b. Auction Acceptance: Price staying outside or near edge with small candles (acceptance of new value)
+        acceptance_adverse = (direction == 1 and features["acceptance_high"][-1] < 0.25) or \
+                             (direction == -1 and features["acceptance_high"][-1] > 0.75)
+        
+        if is_breakout_adverse and (features["bb_expansion"][-1] > 0.02 or acceptance_adverse):
+            return {"exit": True, "exit_reason": "range_breakout_or_acceptance", "lifecycle_phase": StrategyPhase.FAILURE}
 
-        # 2. RANGE EXHAUSTION / QUALITY Deterioration
+        # 2. LIQUIDITY OBJECTIVE REACHED
+        # If we just swept the opposite side liquidity, we achieved the 'why' of the trade
+        recent_max = np.max(features["high"][-20:-1])
+        recent_min = np.min(features["low"][-20:-1])
+        if direction == 1 and features["high"][-1] > recent_max: # Swept upper while long
+             return {"exit": True, "exit_reason": "liquidity_objective_achieved", "lifecycle_phase": StrategyPhase.EXIT}
+        elif direction == -1 and features["low"][-1] < recent_min: # Swept lower while short
+             return {"exit": True, "exit_reason": "liquidity_objective_achieved", "lifecycle_phase": StrategyPhase.EXIT}
+
+        # 3. RANGE EXHAUSTION / QUALITY Deterioration
         adx = features["adx"][-1]
         hurst = getattr(regime_state, "hurst", 0.5)
         if adx > 28 or hurst > 0.6:

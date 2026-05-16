@@ -39,7 +39,7 @@ class AuctionBalanceFade(RangeTradingLifecycleEngine):
             
         return valid
 
-    def confirm_entry(self, candles: List[Candle]) -> bool:
+    def confirm_entry(self, candles: List[Candle], regime_state: Optional[RegimeState] = None, mtf_state: Optional[MTFRegimeState] = None) -> bool:
         # Confirmation by seeing acceptance start to fall toward balance
         features = TechnicalFeatureEngine.get_candle_features(candles)
         acc = features["acceptance_high"]

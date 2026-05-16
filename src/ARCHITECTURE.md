@@ -23,9 +23,20 @@ The platform implements a continuous trend monitoring system that models trends 
 -   **Late-Trend Protection**: Deterministically blocks new entries when trend maturity or exhaustion risk exceeds defined thresholds.
 -   **Persistence Estimation**: Utilizes Hurst Exponent and Kalman filters to differentiate between sustainable trends and noisy rallies.
 
-## Pipeline Flow
+## Instrument-Aware Architecture (Version 2.0)
 
-`Market Data` → `Regime Classification` → `Strategy Signals` → `Meta-Model (ML Filter)` → `Risk Gating` → `Execution Timing` → `Post-Trade Attribution`
+The system has been upgraded to a fully instrument-aware architecture where no universal parameters remain. Every decision depends on the instrument's specific behavior profile:
+
+- **Instrument Profiles & Archetypes** (`src/core/contracts/`): Instruments are categorized (e.g., `sweep_prone` for Gold, `trend_heavy` for Indices).
+- **Strategy Compatibility Matrix**: A centralized routing system that determines if a strategy family is suitable for a given instrument, regime, and session.
+- **Instrument-Specific Parameterization**: Breakout, Trend, and Range strategies load unique parameters (lookbacks, barriers, multipliers) based on the symbol being traded.
+- **Asset-Aware Risk Engine**: Models per-instrument risk, asset-class caps, shorting penalties, and event-risk sensitivity.
+- **Instrument-Aware Execution**: Adapts to session-specific spreads, partial fill likelihoods, and slippage profiles unique to the asset class.
+- **Drift Monitoring**: Locally tracks if an instrument's market behavior is diverging from its registered specification.
+
+## Pipeline Flow (Instrument-Aware)
+
+`Market Data` + `Instrument Spec` → `Regime Classification` → `Strategy Matrix Filter` → `Instrument-Specific Signal` → `Risk Gating (Asset Class Aware)` → `Execution (Session Aware)` → `Drift Monitoring`
 
 ## Key Data Contracts
 

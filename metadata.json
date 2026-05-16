@@ -1,6 +1,6 @@
 {
   "name": "Cortex Institutional Quant Platform",
-  "description": "Multi-regime autonomous trading laboratory with deterministic logic and ML filters.",
+  "description": "Professional multi-asset quant platform with instrument-aware execution, risk, and strategy orchestration.",
   "requestFramePermissions": [],
   "majorCapabilities": []
 }

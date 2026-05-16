@@ -35,7 +35,7 @@ class RangeFade(RangeTradingLifecycleEngine):
             
         return valid
 
-    def confirm_entry(self, candles: List[Candle]) -> bool:
+    def confirm_entry(self, candles: List[Candle], regime_state: Optional[RegimeState] = None, mtf_state: Optional[MTFRegimeState] = None) -> bool:
         # Standard rejection confirmation from engine
-        return super().confirm_entry(candles)
+        return super().confirm_entry(candles, regime_state, mtf_state)
 

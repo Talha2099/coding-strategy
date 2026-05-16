@@ -42,7 +42,7 @@ class RangeEdgeRotation(RangeTradingLifecycleEngine):
             
         return setup_valid
 
-    def confirm_entry(self, candles: List[Candle]) -> bool:
+    def confirm_entry(self, candles: List[Candle], regime_state: Optional[RegimeState] = None, mtf_state: Optional[MTFRegimeState] = None) -> bool:
         # Rotation requires a more certain turn
         features = TechnicalFeatureEngine.get_candle_features(candles)
         # RSI crossing its moving average or midpoint

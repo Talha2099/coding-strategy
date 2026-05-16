@@ -2,13 +2,22 @@ from abc import ABC, abstractmethod
 from typing import List, Optional, Dict
 from src.core.types.trading import Candle, Tick, RegimeState, MTFRegimeState
 from src.core.types.strategy import TradeIdea, RegimeType, StrategyFamily
-from src.core.contracts.spec import InstrumentSpec
+from src.core.contracts.instrument_spec import InstrumentSpec
+from src.core.contracts.parameter_registry import ParameterRegistry
+from src.core.contracts.strategy_params import StrategyParameters
 
 class BaseStrategy(ABC):
     def __init__(self, name: str, family: StrategyFamily, spec: InstrumentSpec):
         self.name = name
         self.family = family
         self.spec = spec
+
+    def get_params(self, symbol: Optional[str] = None) -> StrategyParameters:
+        """Retrieves instrument-specific parameters for this strategy family"""
+        from src.core.contracts.instrument_registry import InstrumentRegistry
+        sym = symbol or self.spec.symbol
+        spec = InstrumentRegistry.get_spec(sym)
+        return ParameterRegistry.get_params(spec.behavior.archetype, self.family)
 
     @abstractmethod
     def is_valid_regime(self, regime: RegimeType) -> bool:

@@ -42,12 +42,31 @@ class RangeExecutionEngine:
         # 5. OVERBOUGHT/OVERSOLD
         is_extreme = (rsi > 65) if direction == -1 else (rsi < 35)
 
-        # 6. QUALITY CHECK
-        if analysis["quality_score"] < 0.3: return False
+        # 6. STRATEGIC EXECUTION (Game Theory)
+        entry_style = plan.get("entry_style", "fade_edge")
+        
+        # 6a. Trap Reclaim: If we were sweeping, wait for price to close back INSIDE the band
+        is_reclaiming = False
+        if entry_style == "trap_fade":
+             if direction == -1: # Short after upper sweep
+                  is_reclaiming = (last.close < features["bb_upper"][-1]) and (features["high"][-2] > features["bb_upper"][-2])
+             elif direction == 1: # Long after lower sweep
+                  is_reclaiming = (last.close > features["bb_lower"][-1]) and (features["low"][-2] < features["bb_lower"][-2])
+        
+        # 6b. Absorption: High volume, small body, big rejection wick at edge
+        is_absorption = (features["rel_vol"][-1] > 1.8) and (features["body_pct"][-1] < 0.3) and \
+                        ((is_upper_rejection if direction == -1 else is_lower_rejection))
 
+        # 7. QUALITY CHECK
+        if analysis["quality_score"] < 0.25: return False # Absolute floor
+
+        # 8. FINAL DECISION
+        if entry_style == "trap_fade":
+             return is_reclaiming or is_absorption
+             
         if direction == -1: # Fading High
-            return (is_upper_rejection or is_extreme) and is_closing_reverted
+             return (is_upper_rejection or is_extreme or is_absorption) and is_closing_reverted
         elif direction == 1: # Fading Low
-            return (is_lower_rejection or is_extreme) and is_closing_reverted
+             return (is_lower_rejection or is_extreme or is_absorption) and is_closing_reverted
             
         return False

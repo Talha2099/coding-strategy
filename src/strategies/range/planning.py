@@ -11,13 +11,14 @@ class RangePlanningEngine:
     def __init__(self, min_width_atr: float = 2.0):
         self.min_width_atr = min_width_atr
 
-    def plan(self, candles: List[Candle], analysis: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def plan(self, candles: List[Candle], analysis: Dict[str, Any], params: Optional[RangeParams] = None) -> Optional[Dict[str, Any]]:
+        if params is None: params = RangeParams()
         # 1. NO-TRADE LOGIC (Explicit Rejection Reasons)
         rejection_reason = None
         
         if not analysis["is_rangy"] and not analysis["is_overextended"]:
             rejection_reason = "not_in_range_or_mean_reversion_context"
-        elif analysis["health"] < 0.25:
+        elif analysis["health"] < params.min_regime_confidence - 0.2:
             rejection_reason = "range_health_too_low"
         elif analysis["atr_rel"] > 0.7:
             rejection_reason = "range_too_noisy"
@@ -57,34 +58,58 @@ class RangePlanningEngine:
         direction = 0
         entry_style = "fade_edge"
         
-        # Distance to boundaries
-        dist_to_upper = bb_upper - last_price
-        dist_to_lower = last_price - bb_lower
-        
-        if dist_to_upper < (bb_upper - bb_mid) * 0.25:
-             direction = -1 # Fade High
-        elif dist_to_lower < (bb_mid - bb_lower) * 0.25:
-             direction = 1 # Fade Low
-        elif analysis["is_overextended"]:
-             direction = -1 if last_price > bb_mid else 1
-             entry_style = "mean_reversion"
+        # Game Theory Overrides
+        if analysis["is_upper_sweep"] or (analysis["trap_probability"] > 0.6 and last_price > bb_mid):
+             direction = -1
+             entry_style = "trap_fade"
+        elif analysis["is_lower_sweep"] or (analysis["trap_probability"] > 0.6 and last_price < bb_mid):
+             direction = 1
+             entry_style = "trap_fade"
         else:
-             return None # Mid-range rotation, no clear edge
+            # Distance to boundaries (Normal fading)
+            dist_to_upper = bb_upper - last_price
+            dist_to_lower = last_price - bb_lower
+            
+            buffer_dist = (bb_upper - bb_mid) * params.edge_buffer_pct
+            
+            if dist_to_upper < buffer_dist:
+                 direction = -1 # Fade High
+            elif dist_to_lower < buffer_dist:
+                 direction = 1 # Fade Low
+            elif analysis["is_overextended"]:
+                 direction = -1 if last_price > bb_mid else 1
+                 entry_style = "mean_reversion"
+            else:
+                 return None # Mid-range rotation, no clear edge
 
         # 4. CALCULATE LEVELS & RISK
         atr = features["atr"][-1]
         
-        # Stop distance scales with volatility and breakout risk
-        stop_dist = atr * (1.5 + analysis["breakout_risk"])
+        # Stop distance scales with volatility and breakout risk + instrument multiplier
+        stop_mult = params.stop_multiplier
+        if entry_style == "trap_fade": 
+            stop_mult *= 0.7
+        else:
+            stop_mult *= (1.0 + analysis["breakout_risk"])
+            
+        stop_dist = atr * stop_mult
+        
         invalidation = bb_upper + stop_dist if direction == -1 else bb_lower - stop_dist
         
+        # If it was a sweep, the invalidation should be the high of the sweep candle
+        if analysis["is_upper_sweep"] and direction == -1:
+             invalidation = max(invalidation, features["high"][-1] + (atr * 0.2))
+        elif analysis["is_lower_sweep"] and direction == 1:
+             invalidation = min(invalidation, features["low"][-1] - (atr * 0.2))
+
         # Targets
         target_mid = bb_mid
         target_opp = bb_lower if direction == -1 else bb_upper
         
         # Risk adjustment by stage
         risk_mult = 1.0
-        if stage == "late": risk_mult = 0.5 # De-risk late range
+        if entry_style == "trap_fade": risk_mult = 1.2 # Reward strategic alignment
+        elif stage == "late": risk_mult = 0.5 # De-risk late range
         elif stage == "early": risk_mult = 0.8 # De-risk unconfirmed range
         
         # Risk-Reward Gate
@@ -103,10 +128,13 @@ class RangePlanningEngine:
             "risk_pct": 0.01 * analysis["quality_score"] * risk_mult,
             "phase": StrategyPhase.PLANNING,
             "metadata": {
-                "is_mean_reversion": entry_style == "mean_reversion",
+                "is_mean_reversion": entry_style in ["mean_reversion", "trap_fade"],
+                "entry_style": entry_style,
                 "range_health": analysis["health"],
                 "breakout_risk": analysis["breakout_risk"],
                 "range_stage": stage,
+                "trap_detected": analysis["trap_probability"] > 0.6,
+                "is_sweep": analysis["is_upper_sweep"] or analysis["is_lower_sweep"],
                 "trailing_rule": "atr_1.5_after_midpoint",
                 "scale_plan": "partial_50_at_midpoint"
             }

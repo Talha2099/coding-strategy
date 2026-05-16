@@ -36,9 +36,9 @@ class SRFade(RangeTradingLifecycleEngine):
             
         return valid
 
-    def confirm_entry(self, candles: List[Candle]) -> bool:
+    def confirm_entry(self, candles: List[Candle], regime_state: Optional[RegimeState] = None, mtf_state: Optional[MTFRegimeState] = None) -> bool:
         # Uses engine's rejection logic
-        return super().confirm_entry(candles)
+        return super().confirm_entry(candles, regime_state, mtf_state)
 
     def define_stop(self, candles: List[Candle]) -> float:
         features = TechnicalFeatureEngine.get_candle_features(candles)

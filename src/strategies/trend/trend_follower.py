@@ -2,7 +2,8 @@ from typing import List, Optional, Dict
 from datetime import datetime
 from src.core.types.trading import Candle, RegimeState, MTFRegimeState
 from src.core.types.strategy import TradeIdea, RegimeType, StrategyFamily
-from src.core.contracts.spec import InstrumentSpec
+from src.core.contracts.instrument_spec import InstrumentSpec
+from src.core.contracts.strategy_params import TrendParams
 from src.strategies.base import BaseStrategy
 from src.features.technical_engine import TechnicalFeatureEngine
 import numpy as np
@@ -25,10 +26,12 @@ class TrendFollower(BaseStrategy):
         ]
 
     def detect_setup(self, candles: List[Candle], regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> bool:
-        if len(candles) < 50: return False
+        params: TrendParams = self.get_params()
+        if len(candles) < params.lookback_window: return False
         
-        # Phase 6: Late-trend protection
-        if regime_state.exhaustion_risk > 0.8 or regime_state.overextension > 3.0:
+        # Phase 6: Late-trend protection (instrument adjusted)
+        exhaustion_limit = 0.8 + (1.0 - regime_state.instrument_adjustment) * 0.1
+        if regime_state.exhaustion_risk > exhaustion_limit or regime_state.overextension > params.max_overextension:
             return False
         
         features = TechnicalFeatureEngine.get_candle_features(candles)
@@ -66,27 +69,28 @@ class TrendFollower(BaseStrategy):
             return last.close < last.open
 
     def define_stop(self, candles: List[Candle]) -> float:
+        params: TrendParams = self.get_params()
         features = TechnicalFeatureEngine.get_candle_features(candles)
         atr = features["atr"][-1]
         close = candles[-1].close
         slope = features["sma_20_slope"][-1]
         
         if slope > 0:
-            return close - (atr * 2.0)
+            return close - (atr * params.stop_multiplier)
         else:
-            return close + (atr * 2.0)
+            return close + (atr * params.stop_multiplier)
 
     def define_target(self, candles: List[Candle]) -> float:
+        params: TrendParams = self.get_params()
         features = TechnicalFeatureEngine.get_candle_features(candles)
         atr = features["atr"][-1]
         close = candles[-1].close
         slope = features["sma_20_slope"][-1]
         
-        # 3:1 RR for trends
         if slope > 0:
-            return close + (atr * 6.0)
+            return close + (atr * params.target_multiplier)
         else:
-            return close - (atr * 6.0)
+            return close - (atr * params.target_multiplier)
 
     def score_setup(self, candles: List[Candle], regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> float:
         features = TechnicalFeatureEngine.get_candle_features(candles)

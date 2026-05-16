@@ -5,7 +5,7 @@ from typing import Literal, Dict
 from src.core.types.trading import ScoredTrade, ExecutionOrder, FillResult
 from src.core.math_engine.finance_models import ExpectancyCalculator
 from src.core.math_engine.stochastic_calculus import MicrostructureSDE
-from src.core.contracts.spec import InstrumentSpec, SessionType, AssetClass
+from src.core.contracts.instrument_spec import InstrumentSpec, SessionType, AssetClass
 
 from src.core.types.strategy import RegimeType
 
@@ -19,66 +19,71 @@ class ExecutionEngine:
         spec = self.specs.get(symbol)
         if not spec: return 0.0001
         
-        base = spec.spread_base
-        # Session Multipliers
-        multipliers = {
-            SessionType.ASIA: 1.5,
-            SessionType.LONDON: 1.0,
-            SessionType.NEW_YORK: 1.0,
-            SessionType.OVERLAP_LN_NY: 0.8,
-            SessionType.CLOSE: 5.0
-        }
+        base = spec.cost_model.spread_fixed
+        # Session Multipliers from Spec
+        session_mult = spec.cost_model.session_spread_multipliers.get(session, 1.0)
         
         regime_mult = 1.0
         if regime:
-            from src.core.types.strategy import RegimeType
             if regime == RegimeType.VOLATILE_UNSTABLE: regime_mult = 3.0
             elif regime == RegimeType.TREND_IGNITION: regime_mult = 1.8
             elif regime == RegimeType.BREAKOUT: regime_mult = 1.5
             
-        return base * multipliers.get(session, 1.0) * regime_mult
+        return base * session_mult * regime_mult
 
     def estimate_slippage(self, order: ExecutionOrder, current_vol: float = 0.0001, regime: Optional[RegimeType] = None) -> float:
         spec = self.specs.get(order.symbol)
-        base_spread = spec.spread_base if spec else 0.0001
+        if not spec: return 0.0001
         
-        simulated_spreads = self.sde_model.simulate_path(base_spread, dt=1/60, steps=10)
-        expected_spread = float(np.mean(simulated_spreads))
+        base_bps = spec.cost_model.slippage_base_bps
         
         vol_scaler = 1.0 + (current_vol * 1000)
         regime_scaler = 1.0
         if regime:
-            from src.core.types.strategy import RegimeType
             if regime in [RegimeType.VOLATILE_UNSTABLE, RegimeType.GAP_DRIVEN]:
                 regime_scaler = 2.0
             elif regime == RegimeType.TREND_IGNITION:
                 regime_scaler = 1.6
         
-        # Market orders and Stops (which become market) have slippage
-        # Fade entries (Limit) might have negative slippage (price improvement)
-        if order.type == "limit":
-             return -expected_spread * 0.1 # Small improvement simulation
+        # In Phase 8, we consider instrument liquidity tier (simulated here)
+        liquidity_mult = 1.0 # Default
+        if spec.asset_class == AssetClass.EQUITY:
+             liquidity_mult = 1.5 # Stocks often have more slippage
              
-        return expected_spread * 0.5 * vol_scaler * regime_scaler
+        # Market orders and Stops (which become market) have slippage
+        if order.type == "limit":
+             return -0.00001 # Small improvement simulation
+             
+        # Calculate slippage as bps of price
+        slippage_price = (base_bps / 10000.0) * order.price * vol_scaler * regime_scaler * liquidity_mult
+        return slippage_price
 
     def validate_for_execution(self, order: ExecutionOrder, spread: float, regime: Optional[RegimeType] = None) -> Tuple[bool, str]:
         spec = self.specs.get(order.symbol)
         if not spec: return False, "UNKNOWN_INSTRUMENT"
         
         # 1. Spread Rejection
-        max_allowed_spread = spec.spread_base * 3.0
+        max_allowed_spread = spec.cost_model.spread_fixed * 3.0
         if regime == RegimeType.VOLATILE_UNSTABLE:
              max_allowed_spread *= 2.0
              
         if spread > max_allowed_spread:
              return False, f"SPREAD_THRESHOLD_EXCEEDED_{spread:.5f} > {max_allowed_spread:.5f}"
              
+        # 2. Execution preference check
+        if spec.cost_model.execution_type_preference == "limit" and order.type == "market":
+             # Optional: warn or reject if strategy is using market but asset prefers limit
+             pass
+
         return True, "READY"
 
     def execute_at_tick(self, order: ExecutionOrder, tick_price: float, session: SessionType, vol: float = 0.0001, regime: Optional[RegimeType] = None) -> Optional[FillResult]:
         """
         Executes order logic against a specific price tick.
         """
+        spec = self.specs.get(order.symbol)
+        if not spec: return None
+
         # Determine if order triggers or executes
         can_execute = False
         execution_price = tick_price
@@ -104,7 +109,7 @@ class ExecutionEngine:
         slippage = self.estimate_slippage(order, vol, regime)
         fill_price = execution_price + slippage if order.side == "buy" else execution_price - slippage
         
-        # Determine fill size based on session liquidity
+        # Determine fill size based on session liquidity AND instrument behavior
         liquidity_map = {
             SessionType.ASIA: 0.8,
             SessionType.LONDON: 1.0,
@@ -112,9 +117,13 @@ class ExecutionEngine:
             SessionType.OVERLAP_LN_NY: 1.1,
             SessionType.CLOSE: 0.1
         }
-        fill_prob = liquidity_map.get(session, 1.0)
+        session_prob = liquidity_map.get(session, 1.0)
+        instrument_prob = spec.cost_model.partial_fill_likelihood
+        
+        fill_prob = session_prob * instrument_prob
         
         fill_size = order.size
+        # Simulate partial fills
         if fill_prob < 1.0:
             actual_ratio = float(np.random.uniform(fill_prob * 0.5, 1.0))
             fill_size = order.size * actual_ratio
@@ -124,6 +133,6 @@ class ExecutionEngine:
             fill_price=fill_price,
             fill_size=fill_size,
             slippage=slippage,
-            commission=self.commission_per_lot * fill_size,
+            commission=spec.cost_model.commission_per_lot * fill_size,
             timestamp=datetime.now()
         )

@@ -3,6 +3,7 @@ import numpy as np
 from src.core.types.strategy import TradeIdea, RegimeType, StrategyFamily
 from src.core.types.trading import Candle, RegimeState, MTFRegimeState
 from src.strategies.base import BaseStrategy
+from src.core.contracts.instrument_registry import InstrumentRegistry
 
 class StrategyRouter:
     """
@@ -21,9 +22,19 @@ class StrategyRouter:
         Main entry point for generating ranked trade ideas.
         """
         current_regime = RegimeType(regime_state.regime_type)
+        spec = InstrumentRegistry.get_spec(symbol)
         
-        # 1. Filter active strategies for this regime
-        active_strats = [s for s in self.strategies if s.is_valid_regime(current_regime)]
+        # 1. Filter active strategies for this regime AND instrument
+        active_strats = []
+        for s in self.strategies:
+            if not s.is_valid_regime(current_regime):
+                continue
+            
+            # Instrument-specific restriction
+            if s.name in spec.restricted_strategies:
+                continue
+            
+            active_strats.append(s)
         
         # 2. Collect setup detection results
         ideas: List[TradeIdea] = []
@@ -32,15 +43,60 @@ class StrategyRouter:
                 if strat.confirm_entry(candles):
                     idea = strat.build_trade_idea(symbol, candles, regime_state, mtf_state)
                     if idea:
+                        # 2.1 Strategic Alignement Scoring
+                        alignment_boost = self._calculate_alignment_boost(idea, spec, regime_state)
+                        idea = self._apply_boost(idea, alignment_boost)
                         ideas.append(idea)
                         
         # 3. Suppress conflicting ideas (e.g. Long vs Short in same asset class)
         final_ideas = self._resolve_conflicts(ideas)
         
-        # 4. Rank candidates by confidence score
+        # 4. Rank candidates by boosted confidence score
         final_ideas.sort(key=lambda x: x.confidence_score, reverse=True)
         
         return final_ideas
+
+    def _calculate_alignment_boost(self, idea: TradeIdea, spec: any, regime_state: RegimeState) -> float:
+        """Calculates a confidence multiplier based on instrument 'DNA' and Strategy Matrix"""
+        from src.core.contracts.strategy_matrix import StrategyCompatibilityMatrix
+        from src.core.contracts.instrument_spec import SessionType
+        
+        # 1. Base Strategy Matrix Score
+        # We need a session, so we'll derive it from regime_state timestamp
+        # In a real system, we'd have a SessionManager
+        session = SessionType.NEW_YORK # Default for now
+        
+        matrix_score = StrategyCompatibilityMatrix.get_suitability_score(
+            strategy_family=idea.strategy_family,
+            archetype=spec.behavior.archetype,
+            regime=RegimeType(regime_state.regime_type),
+            session=session,
+            volatility=getattr(regime_state, "volatility", 0.2), # Fallback
+            trend_strength=getattr(regime_state, "trend_strength", 0.5)
+        )
+        
+        boost = 0.5 + matrix_score # Maps highly compatible to ~1.5x boost
+        
+        # 2. Preferred Strategy Overrides
+        if idea.strategy_name in spec.preferred_strategies:
+            boost += 0.1
+            
+        # 3. Behavioral Scaling (Historical Alignment)
+        behavior = spec.behavior
+        if idea.strategy_family == StrategyFamily.TREND:
+            boost += (behavior.trend_persistence - 0.5) * 0.3
+        elif idea.strategy_family in [StrategyFamily.RANGE, StrategyFamily.MEAN_REVERSION]:
+            boost += (behavior.mean_reversion_propensity - 0.5) * 0.3
+            
+        return max(0.2, min(2.5, boost))
+
+    def _apply_boost(self, idea: TradeIdea, boost: float) -> TradeIdea:
+        # We can't actually modify TradeIdea if it's frozen=True, 
+        # but in strategy.py it is frozen=True. 
+        # I'll update the metadata and score in a new instance.
+        from dataclasses import replace
+        new_score = min(1.0, idea.confidence_score * boost)
+        return replace(idea, confidence_score=new_score, metadata={**idea.metadata, "alignment_boost": boost})
 
     def _resolve_conflicts(self, ideas: List[TradeIdea]) -> List[TradeIdea]:
         """

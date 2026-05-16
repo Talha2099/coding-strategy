@@ -2,16 +2,15 @@ from typing import List, Dict, Type, Optional
 from src.strategies.base import BaseStrategy
 from src.core.types.strategy import RegimeType, StrategyFamily, TradeIdea
 from src.core.types.trading import Candle, RegimeState, MTFRegimeState
-from src.core.contracts.spec import ContractManager
+from src.core.contracts.instrument_registry import InstrumentRegistry
 
 class StrategyRouter:
     """
     Advanced router that activates strategies based on regime, session, and asset class.
     Ranks ideas and suppresses conflicting signals.
     """
-    def __init__(self, contract_manager: ContractManager):
+    def __init__(self):
         self.strategies: Dict[str, BaseStrategy] = {}
-        self.contract_manager = contract_manager
 
     def register_strategy(self, strategy: BaseStrategy):
         self.strategies[strategy.name] = strategy
@@ -21,9 +20,9 @@ class StrategyRouter:
             return []
             
         ideas: List[TradeIdea] = []
-        spec = self.contract_manager.get_spec(symbol)
+        spec = InstrumentRegistry.get_spec(symbol)
         last_candle = candles[-1]
-        session = self.contract_manager.get_session(last_candle.ts)
+        session = InstrumentRegistry.get_session(last_candle.ts, symbol)
         regime = RegimeType(regime_state.regime_type)
         volatility = regime_state.volatility
         

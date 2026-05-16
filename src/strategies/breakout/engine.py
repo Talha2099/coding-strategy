@@ -3,7 +3,8 @@ from src.strategies.base import BaseStrategy
 from src.core.types.strategy import TradeIdea, RegimeType, StrategyFamily, StrategyPhase
 from src.core.types.trading import Candle, RegimeState, MTFRegimeState
 from src.features.technical_engine import TechnicalFeatureEngine
-from src.core.contracts.spec import InstrumentSpec
+from src.core.contracts.instrument_spec import InstrumentSpec
+from src.core.contracts.strategy_params import BreakoutParams
 import numpy as np
 
 class BreakoutLifecycleEngine(BaseStrategy):
@@ -38,20 +39,21 @@ class BreakoutLifecycleEngine(BaseStrategy):
         Phase A: Setup detection (Compression).
         Handles: compression breakout scenario.
         """
-        if len(candles) < 30: return False
+        params: BreakoutParams = self.get_params()
+        if len(candles) < params.lookback_window: return False
         features = TechnicalFeatureEngine.get_candle_features(candles)
         
         # 1. Volatility Compression
         is_squeezed = features["bb_squeeze"][-1] > 0.5
-        low_vol = features["realized_vol"][-1] < np.mean(features["realized_vol"][-50:])
+        low_vol = features["realized_vol"][-1] < np.mean(features["realized_vol"][-params.lookback_window:])
         
         # 2. Consolidation Tightness
         range_tight = features["bb_width"][-1] < np.percentile(features["bb_width"][-100:], 25)
         
         # 3. Acceptance near edges (testing level repeatedly)
         acceptance = features["acceptance_high"][-1]
-        testing_upper = acceptance > 0.7 and abs(features["breakout_dist_upper"][-1]) < 0.3
-        testing_lower = acceptance < 0.3 and abs(features["breakout_dist_lower"][-1]) < 0.3
+        testing_upper = acceptance > (1.0 - params.acceptance_barrier) and abs(features["breakout_dist_upper"][-1]) < 0.3
+        testing_lower = acceptance < params.acceptance_barrier and abs(features["breakout_dist_lower"][-1]) < 0.3
         
         setup_valid = (is_squeezed or range_tight) and (testing_upper or testing_lower)
         
@@ -64,11 +66,12 @@ class BreakoutLifecycleEngine(BaseStrategy):
         """
         Phase B: Entry Trigger / Ignition.
         """
+        params: BreakoutParams = self.get_params()
         features = TechnicalFeatureEngine.get_candle_features(candles)
         last = candles[-1]
         
         # 1. Velocity & Range Expansion
-        vol_expansion = features["rel_vol"][-1] > 1.3
+        vol_expansion = features["rel_vol"][-1] > params.rel_vol_threshold
         range_expansion = features["candle_range"][-1] > features["atr"][-1] * 1.1
         
         # 2. Piercing major levels
@@ -76,7 +79,7 @@ class BreakoutLifecycleEngine(BaseStrategy):
         broken_lower = last.close < features["bb_lower"][-1] or last.close < features["donchian_lower"][-1]
         
         # 3. Directional dominance (Strong Body)
-        strong_body = features["body_pct"][-1] > 0.6
+        strong_body = features["body_pct"][-1] > (params.confirmation_threshold + 0.1)
         
         ignition = (broken_upper or broken_lower) and vol_expansion and strong_body
         
@@ -109,21 +112,23 @@ class BreakoutLifecycleEngine(BaseStrategy):
         return False
 
     def define_stop(self, candles: List[Candle]) -> float:
+        params: BreakoutParams = self.get_params()
         features = TechnicalFeatureEngine.get_candle_features(candles)
         last = candles[-1]
         atr = features["atr"][-1]
         
         if last.close > last.open: # Long
-            return max(features["bb_mid"][-1], last.low - 0.5 * atr)
+            return max(features["bb_mid"][-1], last.low - params.stop_multiplier * atr)
         else: # Short
-            return min(features["bb_mid"][-1], last.high + 0.5 * atr)
+            return min(features["bb_mid"][-1], last.high + params.stop_multiplier * atr)
 
     def define_target(self, candles: List[Candle]) -> float:
+        params: BreakoutParams = self.get_params()
         features = TechnicalFeatureEngine.get_candle_features(candles)
         entry = candles[-1].close
         atr = features["atr"][-1]
         
-        multiplier = 3.5
+        multiplier = params.target_multiplier
         return entry + (multiplier * atr) if entry > candles[-1].open else entry - (multiplier * atr)
 
     def score_setup(self, candles: List[Candle], regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> float:

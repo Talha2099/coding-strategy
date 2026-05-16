@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 from typing import List, Dict, Optional
 from src.core.types.trading import Candle
+from src.core.contracts.instrument_registry import InstrumentRegistry
 
 class TechnicalFeatureEngine:
     """
@@ -112,8 +113,11 @@ class TechnicalFeatureEngine:
         return (np.cumsum(prices * volumes) / (np.cumsum(volumes) + 1e-9))
 
     @staticmethod
-    def get_candle_features(candles: List[Candle]) -> Dict[str, np.ndarray]:
+    def get_candle_features(candles: List[Candle], symbol: Optional[str] = None) -> Dict[str, np.ndarray]:
         if len(candles) < 2: return {}
+        
+        spec = InstrumentRegistry.get_spec(symbol) if symbol else None
+        
         df = pd.DataFrame([c.__dict__ for c in candles])
         closes = df['close'].values
         highs = df['high'].values
@@ -199,7 +203,8 @@ class TechnicalFeatureEngine:
 
         c_stats = TechnicalFeatureEngine.get_candle_stats(highs, lows, opens, closes)
         
-        return {
+        # Base result
+        features = {
             "close": closes,
             "high": highs,
             "low": lows,
@@ -250,3 +255,19 @@ class TechnicalFeatureEngine:
             "lower_wick_pct": c_stats["lower_wick_pct"],
             "candle_range": c_stats["range"]
         }
+
+        # PHASE 11: INSTRUMENT CONTEXT IN FEATURE ENGINE
+        if spec:
+            features["instrument_profile"] = np.full_like(closes, spec.behavior.archetype.value, dtype=object)
+            features["asset_class"] = np.full_like(closes, spec.asset_class.value, dtype=object)
+            features["news_sensitivity"] = np.full_like(closes, float(spec.behavior.news_sensitivity))
+            features["trend_persistence"] = np.full_like(closes, float(spec.behavior.trend_persistence))
+            features["mean_reversion_propensity"] = np.full_like(closes, float(spec.behavior.mean_reversion_propensity))
+            features["gap_frequency_factor"] = np.full_like(closes, float(spec.behavior.gap_frequency))
+            features["holding_cost_bps"] = np.full_like(closes, float(spec.cost_model.swap_long)) 
+            features["execution_cost_fixed"] = np.full_like(closes, float(spec.cost_model.spread_fixed))
+            features["partial_fill_likelihood"] = np.full_like(closes, float(spec.cost_model.partial_fill_likelihood))
+            features["event_risk_sensitivity"] = np.full_like(closes, float(spec.behavior.event_risk_sensitivity))
+            features["liquidity_context"] = np.full_like(closes, spec.point_value) # Using point value as a proxy or just spec info
+        
+        return features

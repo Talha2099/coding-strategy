@@ -35,10 +35,11 @@ class RangeTradingLifecycleEngine(BaseStrategy):
         if not mtf_state:
             # Fallback for STF
             mtf_state = MTFRegimeState(regime_state.symbol, regime_state, regime_state, regime_state, "neutral", 0.0, regime_state.timestamp)
-        return self.analyzer.analyze(candles, mtf_state)
+        return self.analyzer.analyze(candles, mtf_state, self.get_params())
 
     def detect_setup(self, candles: List[Candle], regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> bool:
         self.current_phase = StrategyPhase.ANALYSIS
+        params = self.get_params()
         analysis = self.analyze_setup(candles, regime_state, mtf_state)
         
         # Log Analysis
@@ -53,7 +54,7 @@ class RangeTradingLifecycleEngine(BaseStrategy):
         })
 
         self.current_phase = StrategyPhase.PLANNING
-        plan = self.planner.plan(candles, analysis)
+        plan = self.planner.plan(candles, analysis, params)
         
         if plan:
             system_logger.log_event("RANGE_PLAN_CREATED", {
@@ -67,8 +68,9 @@ class RangeTradingLifecycleEngine(BaseStrategy):
         return False
 
     def confirm_entry(self, candles: List[Candle], regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> bool:
+        params = self.get_params()
         analysis = self.analyze_setup(candles, regime_state, mtf_state)
-        plan = self.planner.plan(candles, analysis)
+        plan = self.planner.plan(candles, analysis, params)
         if not plan: return False
         
         self.current_phase = StrategyPhase.EXECUTION
@@ -108,8 +110,9 @@ class RangeTradingLifecycleEngine(BaseStrategy):
         return float(analysis["quality_score"])
 
     def build_trade_idea(self, symbol: str, candles: List[Candle], regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> Optional[TradeIdea]:
+        params = self.get_params()
         analysis = self.analyze_setup(candles, regime_state, mtf_state)
-        plan = self.planner.plan(candles, analysis)
+        plan = self.planner.plan(candles, analysis, params)
         if not plan: return None
         
         entry = candles[-1].close

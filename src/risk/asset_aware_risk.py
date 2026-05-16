@@ -1,8 +1,11 @@
 import numpy as np
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
-from .spec import AssetClass, InstrumentSpec
-from src.core.types.strategy import TradeIdea, StrategyFamily
+from src.core.contracts.instrument_spec import AssetClass, InstrumentSpec
+from src.core.contracts.instrument_registry import InstrumentRegistry
+from src.core.types.strategy import TradeIdea, StrategyFamily, RegimeType, StrategyPhase
+from src.core.types.trading import RegimeState
+from src.risk.event_overlay import EventRiskOverlay
 
 class CrashProtectionModule:
     """
@@ -59,6 +62,7 @@ class MultiAssetRiskEngine:
     def __init__(self, specs: Dict[str, InstrumentSpec], risk_per_trade: float = 0.01):
         self.specs = specs
         self.risk_per_trade = risk_per_trade
+        self.event_overlay = EventRiskOverlay()
         self.exposure: Dict[str, float] = {} # Symbol -> Notional
         self.class_exposure: Dict[AssetClass, float] = {ac: 0.0 for ac in AssetClass}
         self.strategy_exposure: Dict[StrategyFamily, float] = {sf: 0.0 for sf in StrategyFamily}
@@ -75,10 +79,11 @@ class MultiAssetRiskEngine:
         
         # Risk Limits
         self.limit_per_class = {
-            AssetClass.CFD: 0.8, 
-            AssetClass.STOCK: 0.4,
+            AssetClass.COMMODITY: 0.2, # Reduced commodity cap
+            AssetClass.INDEX: 0.4,
             AssetClass.FOREX: 1.0,
-            AssetClass.CRYPTO: 0.15
+            AssetClass.EQUITY: 0.3,
+            AssetClass.CRYPTO: 0.1
         }
         self.limit_per_strategy = {
             StrategyFamily.TREND: 0.4,
@@ -130,7 +135,7 @@ class MultiAssetRiskEngine:
                        current_spread: float = 0.0,
                        now: Optional[datetime] = None) -> Tuple[bool, str]:
         symbol = idea.symbol
-        spec = self.specs.get(symbol)
+        spec = self.specs.get(symbol) or InstrumentRegistry.get_spec(symbol)
         if not spec: return False, "INSTRUMENT_NOT_FOUND"
         
         # 0. Cooldown Checks
@@ -140,8 +145,19 @@ class MultiAssetRiskEngine:
             if idea.strategy_family.value in self.cooldowns and now < self.cooldowns[idea.strategy_family.value]:
                 return False, f"STRATEGY_COOLDOWN_{idea.strategy_family.value}"
 
+        # 0.5 Event Risk Overlay (PHASE 13)
+        event_multiplier, event_reason = self.event_overlay.get_event_adjustment(symbol)
+        if event_multiplier == 0.0:
+            return False, event_reason or "EVENT_RISK_BLOCK"
+
+        # 0.6 Strategy Alignment Check
+        if not InstrumentRegistry.is_strategy_allowed(symbol, idea.strategy_name):
+            return False, f"STRATEGY_RESTRICTED_FOR_ASSET_{symbol}"
+
         # 1. Spread Check
-        if current_spread > spec.spread_base * 3: 
+        # Use dynamic spread limit from spec if available
+        spread_limit = spec.cost_model.spread_fixed * 3
+        if current_spread > spread_limit: 
             return False, "SPREAD_TOO_WIDE"
 
         # 2. Daily/Drawdown Limits
@@ -157,9 +173,10 @@ class MultiAssetRiskEngine:
         if is_overnight and not spec.allow_overnight:
             return False, "OVERNIGHT_FORBIDDEN"
             
-        # 4. Max Exposure
+        # 4. Max Exposure & Margin
         notional_value = abs(size) * spec.contract_size * spec.point_value
-        if notional_value > equity * 0.5:
+        margin_needed = notional_value * spec.margin_requirement
+        if margin_needed > equity * 0.5:
             return False, "MARGIN_LIMIT_EXCEEDED"
             
         # 5. Strategy Family Limits
@@ -175,10 +192,25 @@ class MultiAssetRiskEngine:
             return False, f"ASSET_CLASS_LIMIT_REACHED_{spec.asset_class.value}"
             
         # 7. Shorting Constraints
-        if idea.direction == "short" and not spec.allow_short:
-            return False, "SHORTING_FORBIDDEN"
+        if idea.direction == "short":
+            if not spec.allow_short:
+                 return False, "SHORTING_FORBIDDEN"
+            # Asset behavior check for shorting (e.g. some stocks are dangerous to short)
+            if spec.behavior.short_penalty_multiplier > 1.5:
+                 return False, "SHORTING_RISK_TOO_HIGH"
             
-        # 8. Regime-based De-risking
+        # 8. Event and Gap Risk
+        if regime_state:
+            news_sens = spec.behavior.news_sensitivity
+            if hasattr(regime_state, "event_proximity") and regime_state.event_proximity < 30: # 30 mins
+                 if news_sens > 0.7:
+                      return False, "NEWS_EVENT_PROXIMITY_RISK"
+            
+            if hasattr(regime_state, "gap_risk"):
+                 if spec.behavior.gap_frequency > 0.5 and regime_state.gap_risk > 0.6:
+                      return False, "HIGH_GAP_RISK_REJECTION"
+
+        # 9. Regime-based De-risking
         if regime_state:
             from src.core.types.strategy import RegimeType
             if regime_state.regime_type in [RegimeType.VOLATILE_UNSTABLE.value, RegimeType.REVERSAL_RISK.value]:
@@ -205,11 +237,13 @@ class MultiAssetRiskEngine:
                            equity: float, 
                            stop_dist: float,
                            regime_state: RegimeState,
+                           idea: Optional[TradeIdea] = None,
                            confidence_score: float = 0.5,
                            rr: float = 2.0) -> float:
         """
         Volatility-scaled sizing, regime-aware, health-aware.
         Implements late-entry penalty and overextension de-risking.
+        Enhanced with Strategic Interaction scaling (Trap/Sweep).
         """
         from src.core.math_engine.finance_models import KellyCriterion
         from src.core.types.strategy import RegimeType, StrategyPhase
@@ -225,29 +259,60 @@ class MultiAssetRiskEngine:
         
         # 3. Regime and Health Scaling
         multiplier = 1.0
+        
+        # 3.0 Event Risk Scaling (Phase 13)
+        event_multiplier, _ = self.event_overlay.get_event_adjustment(symbol)
+        multiplier *= event_multiplier
+        
+        # 3.1 Instrument Specific Scaling
+        # Boost size for instruments with high trend persistence if in a trend regime
+        is_trending = regime_state.regime_type in [RegimeType.CONFIRMED_TREND.value, RegimeType.MID_TREND.value]
+        if is_trending and spec.behavior.trend_persistence > 0.7:
+            multiplier *= 1.2
+            
+        # Short-side penalty for equities (Phase 7)
+        if idea and idea.direction == "short" and spec.asset_class == AssetClass.EQUITY:
+            multiplier *= (1.0 / spec.behavior.short_penalty_multiplier)
+        
         regime = RegimeType(regime_state.regime_type)
         
+        # Strategic Interaction Modeling (Game Theory Scaling)
+        if idea and idea.metadata:
+            # Boost for strategic traps (reclaim after sweep)
+            if idea.metadata.get("is_sweep"):
+                multiplier *= 1.3
+            elif idea.metadata.get("trap_detected"):
+                multiplier *= 1.2
+            
+            # De-risk if it's a 'crowded' or 'standard' fade without trap confirmation
+            if idea.metadata.get("entry_style") == "fade_edge" and not idea.metadata.get("trap_detected"):
+                multiplier *= 0.7
+            
+            # De-risk on acceptance (breakout risk)
+            if idea.metadata.get("breakout_risk", 0) > 0.5:
+                multiplier *= 0.6
+
         # Trend Lifecycle Awareness
         if regime in [RegimeType.EARLY_TREND, RegimeType.TREND_IGNITION, RegimeType.BREAKOUT_ACTIVE]:
-            multiplier = 1.2 # Be aggressive early
+             multiplier *= 1.2
         elif regime in [RegimeType.CONFIRMED_TREND, RegimeType.MID_TREND]:
-            multiplier = 1.0 # Standard size
+            multiplier *= 1.0 # Standard size
         elif regime in [RegimeType.LATE_TREND, RegimeType.TREND_EXHAUSTION, RegimeType.EXHAUSTION_RISK]:
-            multiplier = 0.5 # Scale down at the end
+            multiplier *= 0.5 # Scale down at the end
         elif regime in [RegimeType.REVERSAL_RISK, RegimeType.TREND_FAILED, RegimeType.VOLATILE_UNSTABLE]:
-            multiplier = 0.2 # Extreme caution
+            multiplier *= 0.2 # Extreme caution
         elif regime == RegimeType.PRE_TREND_COMPRESSION:
-            multiplier = 0.8 # Anticipatory entry de-risking
+            multiplier *= 0.8 # Anticipatory entry de-risking
             
         # Range Lifecycle Awareness
         elif regime in [RegimeType.RANGE_ESTABLISHED, RegimeType.RANGE_HIGH_TOUCH, RegimeType.RANGE_LOW_TOUCH]:
-            multiplier = 1.1 # High confidence in range
+            multiplier *= 1.1 # High confidence in range
         elif regime in [RegimeType.RANGE_FORMING, RegimeType.MEAN_REVERSION_SETUP]:
-            multiplier = 0.8 # Scaling in/Early confidence
+            multiplier *= 0.8 # Scaling in/Early confidence
         elif regime in [RegimeType.RANGE_EXHAUSTION, RegimeType.RANGE_EXPANSION_ATTEMPT]:
-            multiplier = 0.5 # De-risk at potential end of range
+            multiplier *= 0.5 # De-risk at potential end of range
         elif regime in [RegimeType.RANGE_BROKEN_UPSIDE, RegimeType.RANGE_BROKEN_DOWNSIDE, RegimeType.RANGE_TO_TREND]:
-            multiplier = 0.1 # Should be blocked but just in case
+            multiplier *= 0.1 # Should be blocked but just in case
             
         # 4. Health and Persistence Scaling
         health_mult = getattr(regime_state, "health_score", 0.5) 

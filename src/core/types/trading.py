@@ -125,6 +125,7 @@ class RegimeState:
     acceleration: float = 0.0
     overextension: float = 0.0 # Score reflecting distance from mean
     exhaustion_risk: float = 0.0 # 0 to 1
+    instrument_adjustment: float = 0.5 # DNA multiplier for this instrument
     timestamp: datetime = field(default_factory=datetime.utcnow)
 
 @dataclass(frozen=True)

@@ -3,7 +3,8 @@ from src.strategies.base import BaseStrategy
 from src.core.types.strategy import TradeIdea, RegimeType, StrategyFamily, StrategyPhase
 from src.core.types.trading import Candle, RegimeState, MTFRegimeState
 from src.features.technical_engine import TechnicalFeatureEngine
-from src.core.contracts.spec import InstrumentSpec
+from src.core.contracts.instrument_spec import InstrumentSpec
+from src.core.contracts.strategy_params import MeanReversionParams
 import numpy as np
 
 class MeanReversionLifecycleEngine(BaseStrategy):
@@ -16,8 +17,8 @@ class MeanReversionLifecycleEngine(BaseStrategy):
     - partial/full mean reversion
     - mean reversion failure during trend
     """
-    def __init__(self, name: str, spec: InstrumentSpec):
-        super().__init__(name, StrategyFamily.MEAN_REVERSION, spec)
+    def __init__(self, spec: InstrumentSpec):
+        super().__init__("LifecycleMeanReversion", StrategyFamily.MEAN_REVERSION, spec)
         self.current_phase = StrategyPhase.SETUP_DETECTED
 
     def is_valid_regime(self, regime: RegimeType) -> bool:
@@ -35,16 +36,17 @@ class MeanReversionLifecycleEngine(BaseStrategy):
         Phase A: Setup formation.
         Handles: stretched away from mean, volatility spike.
         """
-        if len(candles) < 30: return False
+        params: MeanReversionParams = self.get_params()
+        if len(candles) < params.lookback_window: return False
         features = TechnicalFeatureEngine.get_candle_features(candles)
         
         # 1. Statistical Stretch
         zscore = features["zscore"][-1]
-        is_stretched = abs(zscore) > 2.2
+        is_stretched = abs(zscore) > params.zscore_threshold
         
         # 2. RSI Extremes
         rsi = features["rsi"][-1]
-        is_extreme = rsi > 72 or rsi < 28
+        is_extreme = rsi > params.rsi_extreme_upper or rsi < params.rsi_extreme_lower
         
         # 3. Volatility Spike
         vol_spike = features["rel_vol"][-1] > 2.0
@@ -56,11 +58,12 @@ class MeanReversionLifecycleEngine(BaseStrategy):
             
         return setup_valid
 
-    def confirm_entry(self, candles: List[Candle]) -> bool:
+    def confirm_entry(self, candles: List[Candle], regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> bool:
         """
         Phase B: Entry Trigger / Rejection.
         Handles: rejection from extension.
         """
+        params: MeanReversionParams = self.get_params()
         features = TechnicalFeatureEngine.get_candle_features(candles)
         last = candles[-1]
         
@@ -69,7 +72,9 @@ class MeanReversionLifecycleEngine(BaseStrategy):
         upper_wick = features["upper_wick_pct"][-1]
         lower_wick = features["lower_wick_pct"][-1]
         
-        rejection = (z > 2.0 and upper_wick > 0.4) or (z < -2.0 and lower_wick > 0.4)
+        # Rejection must be significant enough relative to instrument behavior
+        rejection_level = 0.4
+        rejection = (z > 2.0 and upper_wick > rejection_level) or (z < -2.0 and lower_wick > rejection_level)
         
         confirmed = rejection
         if confirmed:
@@ -82,22 +87,23 @@ class MeanReversionLifecycleEngine(BaseStrategy):
         Handles: mean reversion failure during trend.
         """
         features = TechnicalFeatureEngine.get_candle_features(candles)
-        # Invalidated if trend picks up speed against us
+        # Invalidated if trend picks up speed against us (Phase 6+)
         if features["adx"][-1] > features["adx"][-2] + 2.5:
              self.current_phase = StrategyPhase.INVALIDATED
              return True
         return False
 
     def define_stop(self, candles: List[Candle]) -> float:
+        params: MeanReversionParams = self.get_params()
         last = candles[-1]
         atr = TechnicalFeatureEngine.get_candle_features(candles)["atr"][-1]
-        buffer = 0.5 * atr
+        buffer = params.stop_multiplier * atr
         return last.low - buffer if last.close > last.open else last.high + buffer
 
     def define_target(self, candles: List[Candle]) -> float:
         features = TechnicalFeatureEngine.get_candle_features(candles)
         # Target Mid BB or EMA20
-        return features["bb_mid"][-1]
+        return float(features["bb_mid"][-1])
 
     def on_trade_update(self, candles: List[Candle], idea: TradeIdea, regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> Optional[Dict]:
         """
@@ -166,3 +172,7 @@ class MeanReversionLifecycleEngine(BaseStrategy):
             holding_period_hint="scalp",
             timestamp=candles[-1].ts
         )
+
+    def score_setup(self, candles: List[Candle], regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> float:
+        z = TechnicalFeatureEngine.get_candle_features(candles)["zscore"][-1]
+        return min(1.0, abs(z) / 4.0)

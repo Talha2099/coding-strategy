@@ -8,6 +8,9 @@ from src.core.types.trading import Candle, RegimeState
 from src.regime.health import TrendHealthEngine
 from src.regime.persistence import TrendPersistenceEngine
 
+from src.core.contracts.instrument_spec import InstrumentSpec
+from src.core.contracts.instrument_registry import InstrumentRegistry
+
 class RegimeEngine:
     """
     Advanced market state classifier that detects regimes and transitions.
@@ -20,10 +23,12 @@ class RegimeEngine:
         self.health_engine = TrendHealthEngine()
 
     def classify(self, candles: List[Candle], symbol: str) -> RegimeState:
+        spec = InstrumentRegistry.get_spec(symbol)
         if len(candles) < 50:
             return self._default_state(symbol)
 
         features = TechnicalFeatureEngine.get_candle_features(candles)
+        behavior = spec.behavior
         
         # Current values
         curr_price = features["close"][-1]
@@ -35,10 +40,16 @@ class RegimeEngine:
         bb_width = features["bb_width"][-1]
         bb_squeeze = features["bb_squeeze"][-1]
         sma_20_slope = features["sma_20_slope"][-1]
+        hurst = features.get("hurst", [0.5])[-1]
         
-        # 1. Base Logic Flags
-        is_high_vol = curr_atr > hist_atr_mean * 2.0
-        is_trending_adx = curr_adx > 25
+        # 1. Base Logic Flags (ADAPTED BY INSTRUMENT)
+        # Some instruments are naturally more volatile: adjust 'high vol' threshold
+        vol_mult = 2.0 * (1.0 + (behavior.volatility_regime_avg - 0.2))
+        is_high_vol = curr_atr > hist_atr_mean * vol_mult
+        
+        # Trend threshold depends on persistence
+        trend_threshold = 25.0 * (1.0 - (behavior.trend_persistence - 0.5) * 0.4)
+        is_trending_adx = curr_adx > trend_threshold
         
         rel_vol = features["rel_vol"][-1]
         breakout_dist_upper = features["breakout_dist_upper"][-1]
@@ -66,7 +77,7 @@ class RegimeEngine:
         if is_high_vol and curr_adx < 20:
              regime = RegimeType.VOLATILE_UNSTABLE
              stage = 0
-        elif abs(features["gap_size"][-1]) > 0.01:
+        elif abs(features["gap_size"][-1]) > (0.01 * behavior.news_sensitivity):
              regime = RegimeType.GAP_DRIVEN
              stage = 0
 
@@ -114,7 +125,9 @@ class RegimeEngine:
         
         # E. RANGE & MEAN REVERSION LIFECYCLE
         else:
-            is_range_context = curr_adx < 20 and hurst < 0.55
+            # Adjust range definition by mean reversion propensity
+            range_hurst_cutoff = 0.55 + (behavior.mean_reversion_propensity - 0.5) * 0.2
+            is_range_context = curr_adx < trend_threshold and hurst < range_hurst_cutoff
             zscore = features["zscore"][-1]
             
             # Boundary Proximity
@@ -122,7 +135,8 @@ class RegimeEngine:
             at_low = breakout_dist_lower > -0.15 and breakout_dist_lower < 0.05
             
             if is_range_context:
-                if (curr_rsi > 70 or curr_rsi < 30 or abs(zscore) > 2.2):
+                mr_threshold = 2.2 - (behavior.mean_reversion_propensity - 0.5) * 0.5
+                if (curr_rsi > 70 or curr_rsi < 30 or abs(zscore) > mr_threshold):
                     regime = RegimeType.MEAN_REVERSION_SETUP
                     stage = 1
                 elif at_high:
@@ -171,6 +185,7 @@ class RegimeEngine:
             acceleration=health_metrics["acceleration"],
             overextension=overextension,
             exhaustion_risk=exhaustion,
+            instrument_adjustment=behavior.trend_persistence, # New field
             timestamp=candles[-1].ts
         )
 
