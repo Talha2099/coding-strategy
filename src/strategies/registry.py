@@ -1,19 +1,40 @@
-from typing import List, Dict, Type, Optional
+from typing import List, Dict, Type, Optional, Tuple
 from src.strategies.base import BaseStrategy
 from src.core.types.strategy import RegimeType, StrategyFamily, TradeIdea
 from src.core.types.trading import Candle, RegimeState, MTFRegimeState
 from src.core.contracts.instrument_registry import InstrumentRegistry
+from src.instruments.behavior_engine import BehaviorEngine
+from src.scoring.behavioral_validation import BehavioralValidator
 
 class StrategyRouter:
     """
-    Advanced router that activates strategies based on regime, session, and asset class.
-    Ranks ideas and suppresses conflicting signals.
+    PHASE 13: Dynamic Behavior-Aware Strategy Router.
+    Prioritizes and activates strategies based on Quantitative Behavior Scores.
     """
     def __init__(self):
         self.strategies: Dict[str, BaseStrategy] = {}
 
     def register_strategy(self, strategy: BaseStrategy):
         self.strategies[strategy.name] = strategy
+
+    def dynamic_strategy_router(self, symbol: str, candles: List[Candle], regime_state: RegimeState) -> Dict[StrategyFamily, float]:
+        """
+        Logic for dynamic allocation based on behavior scores.
+        """
+        scores = BehaviorEngine.get_behavior_profile(candles, symbol)
+        
+        allocations = {
+            StrategyFamily.TREND: scores["trend_quality"],
+            StrategyFamily.BREAKOUT: scores["breakout_quality"],
+            StrategyFamily.MEAN_REVERSION: scores["mean_reversion"],
+            StrategyFamily.RANGE: 1.0 - scores["trend_quality"] # Range inverse of trend quality
+        }
+        
+        # Adjust for fake breakout probability
+        if scores["fake_breakout_prob"] > 0.6:
+            allocations[StrategyFamily.BREAKOUT] *= 0.5
+            
+        return allocations
 
     def get_trade_ideas(self, symbol: str, candles: List[Candle], regime_state: RegimeState, mtf_state: Optional[MTFRegimeState] = None) -> List[TradeIdea]:
         if not candles:
@@ -22,12 +43,14 @@ class StrategyRouter:
         ideas: List[TradeIdea] = []
         spec = InstrumentRegistry.get_spec(symbol)
         last_candle = candles[-1]
-        session = InstrumentRegistry.get_session(last_candle.ts, symbol)
+        
+        # Get Dynamic Behavioral Allocations
+        allocations = self.dynamic_strategy_router(symbol, candles, regime_state)
+        
         regime = RegimeType(regime_state.regime_type)
         volatility = regime_state.volatility
         
         # 1. Activation & Suppression Logic
-        # Trend-specific suppression rules
         is_strong_trend = regime in [
             RegimeType.EARLY_TREND, RegimeType.CONFIRMED_TREND, RegimeType.MID_TREND, 
             RegimeType.TREND_UP, RegimeType.TREND_DOWN, RegimeType.BREAKOUT_ACTIVE,
@@ -35,14 +58,14 @@ class StrategyRouter:
         ]
         health = getattr(regime_state, "health_score", 0.5)
         
-        suppress_mr = is_strong_trend and health > 0.6
+        # Enhanced suppression using Behavioral Scores
+        scores = BehaviorEngine.get_behavior_profile(candles, symbol)
+        
+        suppress_mr = is_strong_trend and health > 0.6 and scores["trend_quality"] > 0.7
         suppress_breakout = (volatility > 0.05 and regime == RegimeType.VOLATILE_UNSTABLE) or \
-                            (regime in [RegimeType.RANGE, RegimeType.RANGE_ESTABLISHED] and health < 0.4)
+                            (scores["fake_breakout_prob"] > 0.75)
         
         suppress_range = is_strong_trend and health > 0.7
-        
-        # Only allow pullback continuation in mature trends
-        is_mature_trend = regime in [RegimeType.MID_TREND, RegimeType.LATE_TREND, RegimeType.EXHAUSTION_RISK]
         
         for name, strategy in self.strategies.items():
             # Regime Filtering
@@ -57,11 +80,10 @@ class StrategyRouter:
             if strategy.family == StrategyFamily.BREAKOUT and suppress_breakout:
                 continue
                 
-            # Special case: Trend Following in Mature stages
-            if strategy.family == StrategyFamily.TREND and is_mature_trend:
-                # In mature trends, we prefer pullbacks over new breakouts
-                # This could be handled inside the strategy itself, but we can hint it here
-                pass
+            # Behavioral Allocation Check
+            # If the quantitative score for this family is very low, skip to reduce noise
+            if allocations.get(strategy.family, 1.0) < 0.2:
+                continue
 
             # Technical Setup Detection
             if strategy.detect_setup(candles, regime_state, mtf_state):
@@ -73,14 +95,16 @@ class StrategyRouter:
                 if strategy.confirm_entry(candles, regime_state, mtf_state):
                     idea = strategy.build_trade_idea(symbol, candles, regime_state, mtf_state)
                     if idea:
+                        # Apply behavioral boost in router
+                        alignment_boost = self._calculate_alignment_boost(idea, spec, regime_state, candles)
+                        # factor in dynamic allocation
+                        idea.confidence_score *= (0.8 + allocations.get(idea.strategy_family, 1.0) * 0.4)
                         ideas.append(idea)
         
         # 2. Ranking by Adjusted Confidence (Expectancy-based)
-        # We rank by Confidence * (TargetDist/StopDist)
         ideas.sort(key=lambda x: x.confidence_score * x.risk_reward_ratio, reverse=True)
         
-        # 3. Conflict Resolution (Standard Signal Synthesis)
-        # Avoid opposing signals on the same asset
+        # 3. Conflict Resolution
         final_ideas = []
         symbol_map: Dict[str, TradeIdea] = {}
         
@@ -89,13 +113,44 @@ class StrategyRouter:
                 symbol_map[idea.symbol] = idea
             else:
                 existing = symbol_map[idea.symbol]
-                # If opposite directions, pick the one with significantly higher confidence
                 if idea.direction != existing.direction:
                     if idea.confidence_score > existing.confidence_score + 0.15:
                         symbol_map[idea.symbol] = idea
                 else:
-                    # Same direction, keep the one with better RR or higher confidence
                     if idea.confidence_score * idea.risk_reward_ratio > existing.confidence_score * existing.risk_reward_ratio:
                         symbol_map[idea.symbol] = idea
                         
         return list(symbol_map.values())
+
+    def _calculate_alignment_boost(self, idea: TradeIdea, spec: any, regime_state: RegimeState, candles: List[Candle]) -> float:
+        """Calculates a confidence multiplier based on YAML priors and Behavior scores."""
+        from src.core.contracts.strategy_matrix import StrategyCompatibilityMatrix
+        from src.core.contracts.instrument_spec import SessionType
+        from src.scoring.behavioral_validation import BehavioralValidator
+        
+        session = SessionType.NEW_YORK 
+        matrix_score = StrategyCompatibilityMatrix.get_suitability_score(
+            strategy_family=idea.strategy_family,
+            archetype=spec.behavior.archetype,
+            session=session,
+            volatility=getattr(regime_state, "volatility", 0.2),
+            trend_strength=getattr(regime_state, "trend_strength", 0.5)
+        )
+        
+        boost = 0.5 + matrix_score 
+        
+        if idea.strategy_name in spec.preferred_strategies:
+            boost *= 1.2
+            
+        # Behavioral Validator integration
+        is_aligned, behavior_score, reason = BehavioralValidator.validate_behavioral_alignment(
+            idea, candles, regime_state
+        )
+        
+        if not is_aligned:
+            boost *= 0.3
+        else:
+            behavior_boost = 0.8 + (behavior_score * 0.5)
+            boost *= behavior_boost
+            
+        return max(0.1, min(3.0, boost))

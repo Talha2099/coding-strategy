@@ -44,7 +44,7 @@ class StrategyRouter:
                     idea = strat.build_trade_idea(symbol, candles, regime_state, mtf_state)
                     if idea:
                         # 2.1 Strategic Alignement Scoring
-                        alignment_boost = self._calculate_alignment_boost(idea, spec, regime_state)
+                        alignment_boost = self._calculate_alignment_boost(idea, spec, regime_state, candles)
                         idea = self._apply_boost(idea, alignment_boost)
                         ideas.append(idea)
                         
@@ -56,39 +56,43 @@ class StrategyRouter:
         
         return final_ideas
 
-    def _calculate_alignment_boost(self, idea: TradeIdea, spec: any, regime_state: RegimeState) -> float:
-        """Calculates a confidence multiplier based on instrument 'DNA' and Strategy Matrix"""
+    def _calculate_alignment_boost(self, idea: TradeIdea, spec: any, regime_state: RegimeState, candles: List[Candle]) -> float:
+        """Calculates a confidence multiplier based on instrument 'DNA', Strategy Matrix, and Behavioral Engine"""
         from src.core.contracts.strategy_matrix import StrategyCompatibilityMatrix
         from src.core.contracts.instrument_spec import SessionType
+        from src.scoring.behavioral_validation import BehavioralValidator
         
         # 1. Base Strategy Matrix Score
-        # We need a session, so we'll derive it from regime_state timestamp
-        # In a real system, we'd have a SessionManager
         session = SessionType.NEW_YORK # Default for now
-        
         matrix_score = StrategyCompatibilityMatrix.get_suitability_score(
             strategy_family=idea.strategy_family,
             archetype=spec.behavior.archetype,
             regime=RegimeType(regime_state.regime_type),
             session=session,
-            volatility=getattr(regime_state, "volatility", 0.2), # Fallback
+            volatility=getattr(regime_state, "volatility", 0.2),
             trend_strength=getattr(regime_state, "trend_strength", 0.5)
         )
         
-        boost = 0.5 + matrix_score # Maps highly compatible to ~1.5x boost
+        boost = 0.5 + matrix_score 
         
         # 2. Preferred Strategy Overrides
         if idea.strategy_name in spec.preferred_strategies:
             boost += 0.1
             
-        # 3. Behavioral Scaling (Historical Alignment)
-        behavior = spec.behavior
-        if idea.strategy_family == StrategyFamily.TREND:
-            boost += (behavior.trend_persistence - 0.5) * 0.3
-        elif idea.strategy_family in [StrategyFamily.RANGE, StrategyFamily.MEAN_REVERSION]:
-            boost += (behavior.mean_reversion_propensity - 0.5) * 0.3
+        # 3. PHASE 13: Behavioral Engine & Validation Integration
+        is_aligned, behavior_score, reason = BehavioralValidator.validate_behavioral_alignment(
+            idea, candles, regime_state
+        )
+        
+        if not is_aligned:
+            # Significant penalty but don't hard block here (let router/risk engine decide)
+            boost *= 0.3
+        else:
+            # Map behavior score [0,1] to a [0.8, 1.3] multiplier
+            behavior_boost = 0.8 + (behavior_score * 0.5)
+            boost *= behavior_boost
             
-        return max(0.2, min(2.5, boost))
+        return max(0.1, min(3.0, boost))
 
     def _apply_boost(self, idea: TradeIdea, boost: float) -> TradeIdea:
         # We can't actually modify TradeIdea if it's frozen=True, 

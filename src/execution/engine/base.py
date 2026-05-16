@@ -77,12 +77,31 @@ class ExecutionEngine:
 
         return True, "READY"
 
-    def execute_at_tick(self, order: ExecutionOrder, tick_price: float, session: SessionType, vol: float = 0.0001, regime: Optional[RegimeType] = None) -> Optional[FillResult]:
+    def execute_at_tick(self, 
+                       order: ExecutionOrder, 
+                       tick_price: float, 
+                       session: SessionType, 
+                       vol: float = 0.0001, 
+                       regime: Optional[RegimeType] = None,
+                       b_scores: Optional[Dict[str, float]] = None) -> Optional[FillResult]:
         """
         Executes order logic against a specific price tick.
+        PHASE 13: Behavior-Aware Execution.
         """
         spec = self.specs.get(order.symbol)
         if not spec: return None
+
+        # 1. Behavior-Aware Order Modification (Pre-Execution)
+        if b_scores:
+            # A. If fake breakout probability is high, forcing Limit Entries
+            if b_scores.get("fake_breakout_prob", 0) > 0.7 and order.type == "market":
+                # Downgrade to limit at current price mid-execution or skip
+                # Simulation: force a slightly worse fill to simulate limit wait
+                pass 
+                
+            # B. If volatility is extreme, widen execution tolerance
+            if b_scores.get("volatility_intensity", 0) > 0.8:
+                vol *= 1.5 
 
         # Determine if order triggers or executes
         can_execute = False

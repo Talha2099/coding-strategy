@@ -60,9 +60,9 @@ class DualChannelTradingNode:
                         
                         # 3. RISK GATING (Optionally applies News Overlay if available)
                         for idea in ideas:
-                            # internally checks GlobalEventCache
+                            # internally checks GlobalEventCache and BehavioralValidator
                             valid, reason = self.risk_engine.validate_trade(
-                                idea, size=1.0, equity=100000.0, regime_state=regime_state
+                                idea, size=1.0, equity=100000.0, regime_state=regime_state, candles=candles
                             )
                             
                             if valid:

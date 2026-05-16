@@ -133,7 +133,8 @@ class MultiAssetRiskEngine:
                        equity: float,
                        regime_state: Optional[RegimeState] = None,
                        current_spread: float = 0.0,
-                       now: Optional[datetime] = None) -> Tuple[bool, str]:
+                       now: Optional[datetime] = None,
+                       candles: Optional[List[Candle]] = None) -> Tuple[bool, str]:
         symbol = idea.symbol
         spec = self.specs.get(symbol) or InstrumentRegistry.get_spec(symbol)
         if not spec: return False, "INSTRUMENT_NOT_FOUND"
@@ -150,7 +151,16 @@ class MultiAssetRiskEngine:
         if event_multiplier == 0.0:
             return False, event_reason or "EVENT_RISK_BLOCK"
 
-        # 0.6 Strategy Alignment Check
+        # 0.6 Behavioral & Quant Alignment Check (PHASE 13)
+        if candles and regime_state:
+            from src.scoring.behavioral_validation import BehavioralValidator
+            is_aligned, b_score, b_reason = BehavioralValidator.validate_behavioral_alignment(
+                idea, candles, regime_state
+            )
+            if not is_aligned:
+                return False, f"BEHAVIORAL_MISALIGNMENT_{b_reason}"
+        
+        # 0.7 Strategy Alignment Check
         if not InstrumentRegistry.is_strategy_allowed(symbol, idea.strategy_name):
             return False, f"STRATEGY_RESTRICTED_FOR_ASSET_{symbol}"
 
@@ -264,7 +274,29 @@ class MultiAssetRiskEngine:
         event_multiplier, _ = self.event_overlay.get_event_adjustment(symbol)
         multiplier *= event_multiplier
         
-        # 3.1 Instrument Specific Scaling
+        # 3.1 Behavior-Aware Sizing (PHASE 13)
+        from src.instruments.behavior_engine import BehaviorEngine
+        b_scores = BehaviorEngine.get_behavior_profile(candles, symbol) if candles else {}
+        
+        if b_scores:
+            # 3.1.1 Volatility Intensity Scaling
+            vol_int = b_scores.get("volatility_intensity", 0.5)
+            if vol_int > 0.8: # High volatility regime
+                multiplier *= 0.6
+                
+            # 3.1.2 Fake Breakout Risk Scaling
+            if idea and idea.strategy_family == StrategyFamily.BREAKOUT:
+                f_prob = b_scores.get("fake_breakout_prob", 0.5)
+                if f_prob > 0.6:
+                    multiplier *= (1.0 - (f_prob - 0.6) * 2) # Steep decay
+            
+            # 3.1.3 Trend Quality Confidence
+            if idea and idea.strategy_family == StrategyFamily.TREND:
+                t_quality = b_scores.get("trend_quality", 0.5)
+                if t_quality > 0.8:
+                    multiplier *= 1.3 # Allow pyramiding or larger size on high quality trends
+        
+        # 3.2 Instrument Specific Scaling
         # Boost size for instruments with high trend persistence if in a trend regime
         is_trending = regime_state.regime_type in [RegimeType.CONFIRMED_TREND.value, RegimeType.MID_TREND.value]
         if is_trending and spec.behavior.trend_persistence > 0.7:

@@ -256,6 +256,27 @@ class TechnicalFeatureEngine:
             "candle_range": c_stats["range"]
         }
 
+        # PHASE 13: Behavioral Scores Integration
+        # Calculate scores for logging and feature use (Vectorized replacements for BehaviorEngine)
+        h_score_vec = np.clip((hurst - 0.5) / 0.3, 0, 1)
+        adx_score_vec = np.clip((adx - 20) / 40, 0, 1)
+        eff_score_vec = np.clip(efficiency / 0.8, 0, 1)
+        features["trend_score_dynamic"] = 0.4 * h_score_vec + 0.3 * adx_score_vec + 0.3 * eff_score_vec
+        
+        mr_h_score = np.clip((0.5 - hurst) / 0.3, 0, 1)
+        mr_z_score = np.clip((np.abs(zscore) - 1.5) / 1.5, 0, 1)
+        mr_bb_score = 1.0 - np.clip(bb_expansion * 10, 0, 1)
+        features["mean_reversion_score_dynamic"] = 0.4 * mr_h_score + 0.4 * mr_z_score + 0.2 * mr_bb_score
+        
+        vol_score_vec = np.clip((rel_vol - 1.2) / 2.0, 0, 1)
+        features["breakout_score_dynamic"] = 0.4 * vol_score_vec + 0.3 * bb_squeeze + 0.3 * np.clip((returns * closes) / (atr + 1e-9), 0, 1)
+        
+        max_wick = np.maximum(c_stats["upper_wick_pct"], c_stats["lower_wick_pct"])
+        wick_score_vec = np.clip((max_wick - 0.3) / 0.4, 0, 1)
+        fake_vol_score = 1.0 - np.clip(rel_vol / 1.5, 0, 1)
+        overextended_score = np.clip((np.abs(zscore) - 2.5) / 1.5, 0, 1)
+        features["fake_breakout_prob_dynamic"] = 0.5 * wick_score_vec + 0.2 * fake_vol_score + 0.3 * overextended_score
+
         # PHASE 11: INSTRUMENT CONTEXT IN FEATURE ENGINE
         if spec:
             features["instrument_profile"] = np.full_like(closes, spec.behavior.archetype.value, dtype=object)

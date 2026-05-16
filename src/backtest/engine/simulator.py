@@ -237,6 +237,10 @@ class EventDrivenBacktester:
         if self.execution_agent:
             entry_price = self.execution_agent.optimize_entry(idea.entry_price, idea.entry_price)
         
+        # PHASE 13: Behavior-Aware Execution in Backtest
+        from src.instruments.behavior_engine import BehaviorEngine
+        b_scores = BehaviorEngine.get_behavior_profile(self.candle_history[symbol], symbol)
+        
         order = ExecutionOrder(
             id=uuid.uuid4().hex, 
             symbol=symbol, 
@@ -246,7 +250,7 @@ class EventDrivenBacktester:
             type="market",
             timestamp=dt
         )
-        fill = self.exec_engine.execute_at_tick(order, entry_price, session, vol, regime=regime)
+        fill = self.exec_engine.execute_at_tick(order, entry_price, session, vol, regime=regime, b_scores=b_scores)
         if not fill: return "EXECUTION_FAILED"
         
         # Record execution for drift monitor
@@ -353,6 +357,10 @@ class EventDrivenBacktester:
         side = "sell" if pos.size > 0 else "buy"
         order_type = "stop" if reason in ["SL", "GAP_EXIT"] else "market"
         
+        # PHASE 13: Behavior-Aware Exit
+        from src.instruments.behavior_engine import BehaviorEngine
+        b_scores = BehaviorEngine.get_behavior_profile(self.candle_history[pos.symbol], pos.symbol)
+        
         order = ExecutionOrder(
             id=uuid.uuid4().hex,
             symbol=pos.symbol,
@@ -362,7 +370,7 @@ class EventDrivenBacktester:
             size=abs(pos.size),
             timestamp=ts
         )
-        fill = self.exec_engine.execute_at_tick(order, exit_price, session, vol, regime=regime)
+        fill = self.exec_engine.execute_at_tick(order, exit_price, session, vol, regime=regime, b_scores=b_scores)
         if not fill: return # Exit failed in simulation
         # 2. Realistic PnL Calculation
         raw_pnl = (fill.fill_price - pos.entry_price) * pos.size * spec.contract_size * spec.point_value

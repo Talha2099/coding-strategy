@@ -37,13 +37,24 @@ class InstrumentRegistry:
         """Heuristic-based profile discovery if manual spec is missing"""
         s = symbol.upper()
         # Indices
-        if any(idx in s for idx in ["GER40", "US30", "NAS100", "SPX500", "UK100", "DAX", "DJI", "NDX"]):
+        if "US100" in s or "NAS100" in s or "NDX" in s:
+            return AssetProfileFactory.get_index_profile("US100")
+        if "US30" in s or "DJI" in s:
+            return AssetProfileFactory.get_index_profile("US30")
+        
+        if any(idx in s for idx in ["GER40", "SPX500", "UK100", "DAX"]):
             return AssetProfileFactory.get_index_profile(symbol)
             
         # Commodities & Gold
-        elif any(comm in s for comm in ["XAU", "GOLD"]):
+        if any(comm in s for comm in ["XAU", "GOLD"]):
             return AssetProfileFactory.get_gold_profile(symbol)
-        elif any(comm in s for comm in ["WTI", "BRENT", "OIL"]):
+        
+        # Specific Forex
+        if "GBPJPY" in s:
+            return AssetProfileFactory.get_gbpjpy_profile(symbol)
+
+        # General Commodities
+        if any(comm in s for comm in ["WTI", "BRENT", "OIL"]):
             return AssetProfileFactory.get_trend_heavy_profile(symbol) # Oil trends hard
             
         # Forex
