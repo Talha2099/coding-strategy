@@ -95,6 +95,23 @@ class StrategyRouter:
                 if strategy.confirm_entry(candles, regime_state, mtf_state):
                     idea = strategy.build_trade_idea(symbol, candles, regime_state, mtf_state)
                     if idea:
+                        # PHASE 13: Behavior-Aware Execution Modifications
+                        b_scores = BehaviorEngine.get_behavior_profile(candles, symbol)
+                        
+                        # 4.1 Volatility Adjustment (Widen Stops)
+                        if b_scores["volatility_intensity"] > 0.7:
+                            # Modify Idea: Widen SL by 20%
+                            from dataclasses import replace
+                            new_sl_dist = abs(idea.entry_price - idea.stop_loss) * 1.2
+                            new_sl = idea.entry_price - new_sl_dist if idea.direction == "long" else idea.entry_price + new_sl_dist
+                            idea = replace(idea, stop_loss=new_sl, metadata={**idea.metadata, "vol_stop_widening": True})
+
+                        # 4.2 Liquidity Confirmation delay (Simulated by reducing confidence if no sweep yet)
+                        if b_scores["liquidity_event"] > 0.8:
+                            # Requires confirmation -> reduce confidence until it happens
+                            # If it's a breakout but we suspect a sweep is happening
+                            idea = replace(idea, confidence_score=idea.confidence_score * 0.9, metadata={**idea.metadata, "liquidity_wait_penalty": True})
+
                         # Apply behavioral boost in router
                         alignment_boost = self._calculate_alignment_boost(idea, spec, regime_state, candles)
                         # factor in dynamic allocation

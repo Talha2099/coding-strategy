@@ -65,3 +65,67 @@ def test_breakout_quality():
     scores = BehaviorEngine.get_behavior_profile(candles, "XAUUSD")
     assert scores["breakout_quality"] > 0.5
     assert scores["fake_breakout_prob"] < 0.4
+
+def test_behavior_strategy_routing():
+    from src.strategies.registry import StrategyRouter
+    from src.regime.engine import RegimeEngine
+    from src.core.types.strategy import RegimeType, StrategyFamily
+    
+    router = StrategyRouter()
+    engine = RegimeEngine()
+    
+    # 1. Trending market
+    candles = []
+    for i in range(100):
+        p = 100 + i * 0.1
+        candles.append(Candle(ts=datetime(2023, 1, 1, 0, i), open=p, high=p+0.1, low=p-0.1, close=p, volume=100))
+    
+    regime_state = engine.classify(candles, "XAUUSD")
+    allocations = router.dynamic_strategy_router("XAUUSD", candles, regime_state)
+    
+    # Trend quality should be high -> Trend allocation high
+    assert allocations[StrategyFamily.TREND] > 0.5
+    assert allocations[StrategyFamily.MEAN_REVERSION] < 0.5
+
+def test_behavior_risk_adjustment():
+    from src.risk.asset_aware_risk import MultiAssetRiskEngine
+    from src.core.types.strategy import TradeIdea, StrategyFamily
+    from src.core.types.trading import RegimeState
+    
+    risk = MultiAssetRiskEngine(specs={})
+    regime_state = RegimeState(
+        symbol="XAUUSD",
+        regime_type=RegimeType.CONFIRMED_TREND.value,
+        volatility=0.01,
+        trend_strength=0.8,
+        health_score=0.9,
+        lifecycle_stage="mature"
+    )
+    
+    # High confidence trending trade idea
+    idea = TradeIdea(
+        strategy_name="TrendFollow",
+        strategy_family=StrategyFamily.TREND,
+        symbol="XAUUSD",
+        direction="long",
+        entry_price=100.0,
+        stop_loss=98.0,
+        take_profit=106.0,
+        confidence_score=0.8,
+        risk_reward_ratio=3.0,
+        metadata={}
+    )
+    
+    # Trending candles
+    candles = []
+    for i in range(100):
+        p = 100 + i * 0.1
+        candles.append(Candle(ts=datetime(2023, 1, 1, 0, i), open=p, high=p+0.1, low=p-0.1, close=p, volume=100))
+    
+    size = risk.get_position_sizing(
+        "XAUUSD", 0.01, 100000.0, 2.0, regime_state,
+        confidence_score=0.8, rr=3.0, candles=candles
+    )
+    
+    # Should be a healthy size
+    assert size > 0

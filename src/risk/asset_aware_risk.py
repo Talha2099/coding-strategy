@@ -249,7 +249,8 @@ class MultiAssetRiskEngine:
                            regime_state: RegimeState,
                            idea: Optional[TradeIdea] = None,
                            confidence_score: float = 0.5,
-                           rr: float = 2.0) -> float:
+                           rr: float = 2.0,
+                           candles: Optional[List[Candle]] = None) -> float:
         """
         Volatility-scaled sizing, regime-aware, health-aware.
         Implements late-entry penalty and overextension de-risking.

@@ -97,11 +97,6 @@ class EventDrivenBacktester:
         spec = InstrumentRegistry.get_spec(symbol)
         session = InstrumentRegistry.get_session(tick.ts, symbol)
         
-        # Phase 13: Monitoring Drift
-        vol = (self.price_history[symbol][-1] * 0.001) if len(self.price_history[symbol]) > 0 else 0.0001
-        spread = self.exec_engine.get_realtime_spread(symbol, session, regime)
-        GlobalMonitoringEngine.get_monitor(symbol).record_market_state(spread, vol)
-
         # 1. Active Trade Management (RL Agent)
         if self.execution_agent:
             self._manage_active_trades(tick)
@@ -111,6 +106,17 @@ class EventDrivenBacktester:
             regime_state = self.regime_engine.classify(self.candle_history[symbol], symbol)
             regime = RegimeType(regime_state.regime_type)
             self.monitor.add_regime_record(regime.value)
+            
+            # Phase 13: Monitoring Drift (Moved here so regime is defined)
+            vol = (self.price_history[symbol][-1] * 0.001) if len(self.price_history[symbol]) > 0 else 0.0001
+            spread = self.exec_engine.get_realtime_spread(symbol, session, regime)
+            monitor = GlobalMonitoringEngine.get_monitor(symbol)
+            monitor.record_market_state(spread, vol)
+            
+            # Record Behavior Scores
+            from src.instruments.behavior_engine import BehaviorEngine
+            b_scores = BehaviorEngine.get_behavior_profile(self.candle_history[symbol], symbol)
+            monitor.record_behavior_scores(b_scores)
             
             # MTF Regime Analysis
             mtf_state = self.mtf_engine.analyze(
@@ -217,11 +223,17 @@ class EventDrivenBacktester:
 
         size = self.risk_engine.get_position_sizing(
             symbol, vol, self.equity_curve[-1], stop_dist, regime_state,
+            idea=idea,
             confidence_score=idea.confidence_score,
-            rr=idea.risk_reward_ratio
+            rr=idea.risk_reward_ratio,
+            candles=self.candle_history[symbol]
         )
         
-        valid, msg = self.risk_engine.validate_trade(idea, size, self.equity_curve[-1], regime_state, spec.cost_model.spread_fixed)
+        valid, msg = self.risk_engine.validate_trade(
+            idea, size, self.equity_curve[-1], regime_state, 
+            current_spread=spec.cost_model.spread_fixed,
+            candles=self.candle_history[symbol]
+        )
         if not valid: 
             system_logger.log_event("RISK_REJECTION", {"reason": msg, "symbol": symbol, "ts": dt.isoformat()})
             return f"REJECTED_RISK_{msg}"
