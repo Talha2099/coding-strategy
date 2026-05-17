@@ -7,10 +7,22 @@ class InstrumentRegistry:
     """Central registry mapping symbols to their behavioral and technical specs"""
     
     _registry: Dict[str, InstrumentSpec] = {}
+    _initialized: bool = False
+
+    @classmethod
+    def _initialize(cls):
+        if cls._initialized: return
+        # Pre-register major instruments
+        cls.register(AssetProfileFactory.get_gold_profile("XAUUSD"))
+        cls.register(AssetProfileFactory.get_gbpjpy_profile("GBPJPY"))
+        cls.register(AssetProfileFactory.get_index_profile("US100"))
+        cls.register(AssetProfileFactory.get_index_profile("US30"))
+        cls._initialized = True
 
     @classmethod
     def get_session(cls, dt: datetime, symbol: str) -> SessionType:
         """Determines the current trading session based on time and instrument hours"""
+        cls._initialize()
         # For now, a simplified global logic, but Phase 9 requires it to be instrument-specific
         # In a full implementation, we'd look at spec.sessions or spec.trading_hours
         h = dt.hour
@@ -27,6 +39,7 @@ class InstrumentRegistry:
 
     @classmethod
     def get_spec(cls, symbol: str) -> InstrumentSpec:
+        cls._initialize()
         if symbol not in cls._registry:
             # Fallback to intelligent guessing based on symbol naming if not registered
             cls._registry[symbol] = cls._auto_discover(symbol)
@@ -77,6 +90,7 @@ class InstrumentRegistry:
 
     @classmethod
     def is_strategy_allowed(cls, symbol: str, strategy_name: str) -> bool:
+        cls._initialize()
         spec = cls.get_spec(symbol)
         if strategy_name in spec.restricted_strategies:
             return False
